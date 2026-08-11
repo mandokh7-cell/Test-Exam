@@ -693,6 +693,16 @@
             modal.classList.add('scale-100', 'translate-y-0');
         };
 
+        // نسخة "مكبوحة" من showModal: لا تُظهر نفس رسالة الخطأ أكثر من مرة كل 8 ثوانٍ،
+        // لأن محاولات إعادة الإرسال التلقائية تتكرر كل ثانية وقد تُغرق الطالب بنوافذ متكررة.
+        let lastRetryModalAt = 0;
+        window.showRetryModalThrottled = (title, message) => {
+            const now = Date.now();
+            if (now - lastRetryModalAt < 8000) return;
+            lastRetryModalAt = now;
+            window.showModal(title, message, 'error');
+        };
+
         window.closeModal = () => {
             const overlay = document.getElementById('custom-modal-overlay');
             const modal = document.getElementById('custom-modal');
@@ -951,17 +961,9 @@
             currentStudentKey = window.buildStudentUniqueKey(currentStudentData);
             window.currentSubmissionId = `${selectedExam.id}_${currentStudentKey}`;
 
-            // تحقق: هل هذا الطالب سلّم هذا الامتحان من قبل؟ (منع التكرار)
-            try {
-                const existing = await window.getDoc(window.doc(window.db, "submissions", window.currentSubmissionId));
-                if (existing.exists()) {
-                    window.showModal('تم التسليم مسبقاً', 'يوجد تسليم مسجّل بالفعل بهذه البيانات لهذا الامتحان. إذا كنت تعتقد أن هذا خطأ، تواصل مع المشرف.', 'error');
-                    if (startBtn) { startBtn.disabled = false; startBtn.innerHTML = 'دخول الامتحان <i class="fa-solid fa-arrow-left"></i>'; }
-                    return;
-                }
-            } catch (e) {
-                console.warn("Duplicate-check failed (continuing):", e);
-            }
+            // ملاحظة: تم إلغاء فحص "هل سلّمت من قبل؟" هنا لأنه يحتاج صلاحية قراءة
+            // من submissions وهي محصورة بالأدمن فقط. الحماية من التكرار تتم فعليًا
+            // في submitExamToFirebase عبر معرف مستند ثابت (create/update rule).
 
             await window.syncServerTime();
 
@@ -1129,10 +1131,20 @@
 
             const submissionId = window.currentSubmissionId || `${selectedExam.id}_${currentStudentKey}`;
 
+            // مهلة قصوى 20 ثانية: التسليم لا يظل "معلّقًا" إلى الأبد أبدًا،
+            // حتى لو حدث خلل غير متوقع في الاتصال بالسيرفر.
+            const withTimeout = (promise, ms) => Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject({ code: 'client-timeout', message: `لم يصل رد من السيرفر خلال ${ms/1000} ثانية` }), ms))
+            ]);
+
             try {
                 // setDoc على معرف ثابت (examId_studentKey): محاولة تسليم ثانية بنفس
                 // الهوية تُصنَّف "update" وترفضها Firestore Rules تلقائيًا (لا تكرار ممكن).
-                await window.setDoc(window.doc(window.db, "submissions", submissionId), submissionData);
+                await withTimeout(
+                    window.setDoc(window.doc(window.db, "submissions", submissionId), submissionData),
+                    20000
+                );
 
                 if (isAutoSubmit) {
                     window.showModal('انتهى الوقت', 'انتهى وقت الاختبار. تم حفظ وتسليم إجاباتك تلقائياً.', 'info');
@@ -1150,13 +1162,27 @@
                 localStorage.removeItem(window.getStorageKey());
                 
             } catch (error) {
-                console.error("Error submitting:", error);
+                console.error("Error submitting submission:", submissionId, "| code:", error?.code, "| message:", error?.message, error);
+
                 if (error?.code === 'permission-denied') {
-                    window.showModal('تم التسليم مسبقاً', 'إجاباتك مسجّلة بالفعل لدى النظام. إن كنت تظن أن هذا خطأ تواصل مع المشرف.', 'info');
-                    localStorage.removeItem(window.getStorageKey());
-                    return;
+                    // رفض دائم من السيرفر (تسليم مكرر بنفس الهوية، أو Rules غير صحيحة).
+                    // لا فائدة من إعادة المحاولة تلقائيًا هنا، فنوقف الحلقة ونعرض رسالة واضحة مرة واحدة.
+                    window.showModal(
+                        'تعذّر التسليم',
+                        'تم رفض العملية من السيرفر. الأسباب المحتملة: (١) إجاباتك مسجّلة بالفعل بهذه البيانات لهذا الامتحان. (٢) خلل في صلاحيات النظام — أبلغ المشرف فورًا واذكر له: permission-denied.',
+                        'error'
+                    );
+                    btn.innerHTML = 'إنهاء وتسليم <i class="fa-solid fa-check"></i>';
+                    btn.disabled = false;
+                    return; // لا نعيد تشغيل التايمر لتفادي تكرار الرسالة كل ثانية
                 }
-                window.showModal('خطأ في الإرسال', 'حدث خطأ أثناء الإرسال. سيتم إعادة المحاولة تلقائيًا، يرجى عدم إغلاق الصفحة.', 'error');
+
+                if (error?.code === 'client-timeout') {
+                    window.showRetryModalThrottled('تأخر الاتصال', 'الاتصال بالسيرفر بطيء جدًا أو منقطع. إجاباتك محفوظة على جهازك بأمان، سنعيد المحاولة تلقائيًا — لا تغلق الصفحة.');
+                } else {
+                    window.showRetryModalThrottled('خطأ في الإرسال', `حدث خطأ أثناء الإرسال (${error?.code || 'غير معروف'}). سيتم إعادة المحاولة تلقائيًا، يرجى عدم إغلاق الصفحة.`);
+                }
+
                 btn.innerHTML = 'إنهاء وتسليم <i class="fa-solid fa-check"></i>';
                 btn.disabled = false;
                 window.startTimer();
