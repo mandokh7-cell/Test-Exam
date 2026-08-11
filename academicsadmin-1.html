@@ -1,0 +1,994 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Academics Admin | لوحة تحكم الامتحانات</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+        // Tailwind Configuration
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: { sans: ['Tajawal', 'sans-serif'], heading: ['Cairo', 'sans-serif'] },
+                    colors: { brand: { 50: '#f0fdfa', 100: '#ccfbf1', 500: '#14b8a6', 600: '#0d9488', 700: '#0f766e', 800: '#115e59', 900: '#134e4a' } }
+                }
+            }
+        }
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBd_Q5f62VsOsmD9wjSpV8mGJpefoXYihE",
+            authDomain: "exam-91bae.firebaseapp.com",
+            projectId: "exam-91bae",
+            storageBucket: "exam-91bae.firebasestorage.app",
+            messagingSenderId: "347396759893",
+            appId: "1:347396759893:web:868523de7dd6d63e9c8fdc"
+        };
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // --- Global State ---
+        window.appState = {
+            user: null,
+            exams: [],
+            submissions: [],
+            requests: [], // المصفوفة الجديدة لطلبات التواصل
+            currentView: 'loading',
+            examDraft: getEmptyExam(),
+            unsubscribeExams: null,
+            unsubscribeSubmissions: null,
+            unsubscribeRequests: null // اشتراك الطلبات
+        };
+
+        function getExamsRef() { return collection(db, 'exams'); }
+        function getSubmissionsRef() { return collection(db, 'submissions'); }
+        function getRequestsRef() { return collection(db, 'contact_requests'); } // المرجع الجديد
+
+        const views = {
+            loading: document.getElementById('view-loading'),
+            login: document.getElementById('view-login'),
+            dashboard: document.getElementById('view-dashboard')
+        };
+        const dashboardPages = {
+            list: document.getElementById('page-exams-list'),
+            form: document.getElementById('page-exam-form'),
+            reports: document.getElementById('page-reports'),
+            requests: document.getElementById('page-requests') // الصفحة الجديدة
+        };
+
+        window.switchView = (viewName) => {
+            Object.values(views).forEach(v => v.classList.add('hidden'));
+            views[viewName].classList.remove('hidden');
+            if(viewName === 'dashboard') views[viewName].classList.add('flex');
+        };
+
+        window.switchPage = (pageName) => {
+            Object.values(dashboardPages).forEach(p => p.classList.add('hidden'));
+            dashboardPages[pageName].classList.remove('hidden');
+            
+            // تحديث الأزرار في القائمة الجانبية
+            document.querySelectorAll('.sidebar-btn').forEach(btn => {
+                btn.classList.remove('bg-brand-500/10', 'text-brand-400');
+                btn.classList.add('text-slate-300');
+            });
+            const activeBtn = document.getElementById(`btn-nav-${pageName}`);
+            if(activeBtn) {
+                activeBtn.classList.add('bg-brand-500/10', 'text-brand-400');
+                activeBtn.classList.remove('text-slate-300');
+            }
+            
+            const menu = document.getElementById('mobile-menu');
+            const overlay = document.getElementById('mobile-overlay');
+            menu.classList.add('translate-x-full');
+            overlay.classList.add('hidden');
+            
+            if(pageName === 'list') renderExamsList();
+            if(pageName === 'requests') renderRequestsList();
+            
+            document.getElementById('main-content').scrollTo(0, 0);
+        };
+
+        window.toggleMobileMenu = () => {
+            const menu = document.getElementById('mobile-menu');
+            const overlay = document.getElementById('mobile-overlay');
+            const isHidden = menu.classList.contains('translate-x-full');
+            
+            if(isHidden) {
+                menu.classList.remove('translate-x-full');
+                overlay.classList.remove('hidden');
+            } else {
+                menu.classList.add('translate-x-full');
+                overlay.classList.add('hidden');
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            window.appState.user = user;
+            if (user) {
+                document.getElementById('admin-email-display').innerText = user.email;
+                switchView('dashboard');
+                switchPage('list');
+                setupRealtimeListeners();
+            } else {
+                switchView('login');
+                cleanupListeners();
+            }
+        });
+
+        // ⚠️ تسجيل الدخول فقط. تم حذف إنشاء الحساب الذاتي (createUserWithEmailAndPassword)
+        // لأنه كان يسمح لأي زائر بإنشاء حساب أدمن لنفسه. أنشئ حسابك من Firebase Console يدويًا.
+        window.handleAuth = async (e) => {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('auth-error');
+            const btn = document.getElementById('auth-btn');
+            
+            errorDiv.classList.add('hidden');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري التحميل...';
+
+            try {
+                await signInWithEmailAndPassword(auth, email, password);
+            } catch (error) {
+                errorDiv.innerText = 'البريد الإلكتروني أو كلمة المرور غير صحيحة.';
+                errorDiv.classList.remove('hidden');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = 'تسجيل الدخول';
+            }
+        };
+
+        window.logout = () => signOut(auth);
+
+        function setupRealtimeListeners() {
+            cleanupListeners();
+            
+            // مستمع الامتحانات
+            window.appState.unsubscribeExams = onSnapshot(getExamsRef(), (snapshot) => {
+                const allExams = [];
+                snapshot.forEach(doc => allExams.push({ id: doc.id, ...doc.data() }));
+                window.appState.exams = allExams.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
+                if(!dashboardPages.list.classList.contains('hidden')) renderExamsList();
+            }, (error) => alert("لم يتمكن النظام من جلب الامتحانات. تأكد من إعدادات Security Rules."));
+
+            // مستمع الإجابات
+            window.appState.unsubscribeSubmissions = onSnapshot(getSubmissionsRef(), (snapshot) => {
+                const allSubs = [];
+                snapshot.forEach(doc => allSubs.push({ id: doc.id, ...doc.data() }));
+                window.appState.submissions = allSubs;
+                if(!dashboardPages.reports.classList.contains('hidden')) {
+                    const examId = document.getElementById('report-exam-title').dataset.examId;
+                    if(examId) window.openReports(examId);
+                }
+            }, (error) => console.error("Error fetching submissions:", error));
+
+            // مستمع طلبات التواصل الجديد
+            window.appState.unsubscribeRequests = onSnapshot(getRequestsRef(), (snapshot) => {
+                const allReqs = [];
+                snapshot.forEach(doc => allReqs.push({ id: doc.id, ...doc.data() }));
+                // ترتيب الطلبات (الأحدث أولاً)
+                window.appState.requests = allReqs.sort((a,b) => (b.createdAt || 0) - (a.createdAt || 0));
+                
+                // تحديث العداد في القائمة الجانبية
+                const badge = document.getElementById('requests-badge');
+                if(allReqs.length > 0) {
+                    badge.classList.remove('hidden');
+                    badge.innerText = allReqs.length;
+                } else {
+                    badge.classList.add('hidden');
+                }
+
+                if(!dashboardPages.requests.classList.contains('hidden')) renderRequestsList();
+            }, (error) => console.error("Error fetching requests:", error));
+        }
+
+        function cleanupListeners() {
+            if(window.appState.unsubscribeExams) window.appState.unsubscribeExams();
+            if(window.appState.unsubscribeSubmissions) window.appState.unsubscribeSubmissions();
+            if(window.appState.unsubscribeRequests) window.appState.unsubscribeRequests();
+        }
+
+        // ==========================================
+        // قسم طلبات التواصل (الجديد)
+        // ==========================================
+        function renderRequestsList() {
+            const container = document.getElementById('requests-grid');
+            container.innerHTML = '';
+            
+            if (window.appState.requests.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full text-center py-16 bg-white rounded-2xl border border-slate-200 border-dashed">
+                        <i class="fa-regular fa-envelope-open text-5xl text-slate-300 mb-4"></i>
+                        <h3 class="text-xl font-bold text-slate-600">لا توجد طلبات تواصل</h3>
+                        <p class="text-slate-400 mt-2">صندوق الطلبات فارغ حالياً.</p>
+                    </div>`;
+                return;
+            }
+
+            window.appState.requests.forEach(req => {
+                const dateStr = req.createdAt ? new Date(req.createdAt).toLocaleString('ar-EG') : 'تاريخ غير معروف';
+                const orgHtml = req.organization ? `<span class="bg-indigo-50 text-indigo-600 text-[10px] font-bold px-2 py-1 rounded truncate max-w-[150px]"><i class="fa-solid fa-building mr-1"></i> ${req.organization}</span>` : '';
+                
+                const card = `
+                    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-5 flex flex-col transition hover:shadow-md relative overflow-hidden">
+                        <div class="absolute top-0 right-0 w-1.5 h-full bg-brand-500"></div>
+                        <div class="flex justify-between items-start mb-3 pr-2">
+                            <h3 class="text-lg font-heading font-black text-slate-800 line-clamp-1">${req.name || 'بدون اسم'}</h3>
+                            <div class="text-[10px] font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded shrink-0" dir="ltr">${dateStr}</div>
+                        </div>
+                        
+                        <div class="flex flex-wrap gap-2 mb-4 pr-2">
+                            <a href="tel:${req.phone}" class="bg-slate-50 border border-slate-100 text-slate-600 hover:text-brand-600 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 transition-colors">
+                                <i class="fa-solid fa-phone text-brand-500"></i> <span dir="ltr">${req.phone || '-'}</span>
+                            </a>
+                            ${req.email ? `
+                            <a href="mailto:${req.email}" class="bg-slate-50 border border-slate-100 text-slate-600 hover:text-brand-600 text-xs font-bold px-3 py-1.5 rounded-lg flex items-center gap-2 transition-colors truncate max-w-full">
+                                <i class="fa-solid fa-envelope text-brand-500"></i> <span dir="ltr" class="truncate">${req.email}</span>
+                            </a>` : ''}
+                            ${orgHtml}
+                        </div>
+
+                        <div class="bg-slate-50 p-4 rounded-xl text-sm text-slate-700 leading-relaxed flex-grow border border-slate-100 whitespace-pre-wrap break-words pr-2 mr-2">
+                            ${req.message || 'لا يوجد رسالة.'}
+                        </div>
+
+                        <div class="mt-4 flex justify-end pr-2 pt-2 border-t border-slate-100">
+                            <button onclick="window.deleteRequest('${req.id}')" class="text-rose-500 hover:bg-rose-50 px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors">
+                                <i class="fa-solid fa-trash-can"></i> حذف الطلب
+                            </button>
+                        </div>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', card);
+            });
+        }
+
+        window.deleteRequest = async (id) => {
+            if(!confirm('هل أنت متأكد من حذف هذا الطلب نهائياً؟')) return;
+            try { await deleteDoc(doc(getRequestsRef(), id)); } 
+            catch (error) { console.error("Error:", error); alert('حدث خطأ أثناء الحذف.'); }
+        };
+
+        // ==========================================
+        // باقي دوال الامتحانات (كما هي في السابق)
+        // ==========================================
+
+        function renderExamsList() {
+            const container = document.getElementById('exams-grid');
+            container.innerHTML = '';
+            
+            if (window.appState.exams.length === 0) {
+                container.innerHTML = `
+                    <div class="col-span-full text-center py-12 bg-white rounded-2xl border border-slate-200">
+                        <i class="fa-solid fa-file-circle-plus text-5xl text-slate-300 mb-4"></i>
+                        <h3 class="text-xl font-bold text-slate-600">لا توجد امتحانات حتى الآن</h3>
+                        <p class="text-slate-400 mt-2">ابدأ بإضافة امتحانك الأول.</p>
+                    </div>`;
+                return;
+            }
+
+            window.appState.exams.forEach(exam => {
+                let statusBadge = '';
+                if(exam.status === 'active') statusBadge = '<span class="bg-emerald-100 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold shrink-0">متاح الآن</span>';
+                else if(exam.status === 'upcoming') statusBadge = '<span class="bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs font-bold shrink-0">قريباً</span>';
+                else if(exam.status === 'hidden') statusBadge = '<span class="bg-amber-100 text-amber-700 px-3 py-1 rounded-full text-xs font-bold shrink-0">مخفي</span>';
+                else statusBadge = '<span class="bg-rose-100 text-rose-700 px-3 py-1 rounded-full text-xs font-bold shrink-0">مغلق</span>';
+
+                const examIdentifier = exam.slug || exam.id;
+                const examUrl = `${window.location.origin}/index.html?exam=${examIdentifier}`;
+
+                const card = `
+                    <div class="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 flex flex-col transition hover:shadow-md">
+                        <div class="flex justify-between items-start mb-3 gap-2">
+                            ${statusBadge}
+                            <span class="text-xs font-bold text-slate-400 bg-slate-50 px-2 py-1 rounded truncate max-w-[120px]">${exam.subject || 'غير محدد'}</span>
+                        </div>
+                        <h3 class="text-lg font-heading font-bold text-slate-800 mb-2 line-clamp-2" title="${exam.title}">${exam.title || 'بدون عنوان'}</h3>
+                        
+                        <div class="flex items-center gap-2 text-sm text-slate-500 mb-4 bg-slate-50 p-2 rounded-lg w-full overflow-hidden">
+                            <i class="fa-solid fa-link text-brand-500 shrink-0"></i>
+                            <input type="text" readonly value="${examUrl}" class="bg-transparent border-none outline-none text-xs w-full cursor-pointer min-w-0" onclick="this.select()">
+                        </div>
+
+                        <div class="mt-auto flex justify-between items-center pt-4 border-t border-slate-100 gap-2 flex-wrap sm:flex-nowrap">
+                            <button onclick="window.openReports('${exam.id}')" class="flex-1 bg-brand-50 text-brand-700 hover:bg-brand-600 hover:text-white transition py-2 px-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 min-w-[100px]">
+                                <i class="fa-solid fa-chart-pie shrink-0"></i> الإجابات
+                            </button>
+                            <div class="flex gap-2 shrink-0">
+                                <button onclick="window.editExam('${exam.id}')" class="w-10 h-10 bg-slate-50 text-slate-600 hover:bg-amber-50 hover:text-amber-600 transition rounded-xl flex items-center justify-center" title="تعديل">
+                                    <i class="fa-solid fa-pen"></i>
+                                </button>
+                                <button onclick="window.deleteExam('${exam.id}')" class="w-10 h-10 bg-slate-50 text-slate-600 hover:bg-rose-50 hover:text-rose-600 transition rounded-xl flex items-center justify-center" title="حذف">
+                                    <i class="fa-solid fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', card);
+            });
+        }
+
+        function getEmptyExam() {
+            return {
+                id: '', title: '', subject: '', slug: '', duration: 60,
+                status: 'active', showScoreToStudent: true,
+                startTime: '', endTime: '',
+                loginFields: [{ label: 'الاسم الرباعي' }, { label: 'رقم الجلوس' }],
+                questions: []
+            };
+        }
+
+        window.openNewExamForm = () => {
+            window.appState.examDraft = getEmptyExam();
+            renderExamFormUI();
+            switchPage('form');
+        };
+
+        window.editExam = async (id) => {
+            const exam = window.appState.exams.find(e => e.id === id);
+            if(exam) {
+                window.appState.examDraft = { ...getEmptyExam(), ...JSON.parse(JSON.stringify(exam)) };
+                if (!window.appState.examDraft.loginFields || window.appState.examDraft.loginFields.length === 0) {
+                    window.appState.examDraft.loginFields = [{ label: 'الاسم' }];
+                }
+
+                // استرجاع الإجابات الصحيحة من مستندها المنفصل (exam_answers) لعرضها في نموذج
+                // التعديل فقط داخل لوحة الأدمن — لا تُخزَّن هذه القيم أبدًا في مستند exams العام.
+                try {
+                    const answersSnap = await getDoc(doc(db, "exam_answers", id));
+                    const answersMap = answersSnap.exists() ? (answersSnap.data().answers || {}) : {};
+                    window.appState.examDraft.questions = (window.appState.examDraft.questions || []).map((q, idx) => {
+                        if (q.type === 'mcq' || !q.type) {
+                            return { ...q, correctOption: answersMap[idx] ?? answersMap[String(idx)] ?? 0 };
+                        }
+                        return q;
+                    });
+                } catch (e) {
+                    console.error("Could not load answer key for editing:", e);
+                    alert('تعذّر تحميل مفتاح الإجابات لهذا الامتحان. تأكد من صلاحياتك كأدمن.');
+                }
+
+                renderExamFormUI();
+                switchPage('form');
+            }
+        };
+
+        function renderExamFormUI() {
+            const draft = window.appState.examDraft;
+            document.getElementById('form-title').innerText = draft.id ? 'تعديل الامتحان' : 'إضافة امتحان جديد';
+            
+            document.getElementById('exam-title').value = draft.title || '';
+            document.getElementById('exam-subject').value = draft.subject || '';
+            document.getElementById('exam-slug').value = draft.slug || '';
+            document.getElementById('exam-duration').value = draft.duration || 60;
+            document.getElementById('exam-status').value = draft.status || 'active';
+            document.getElementById('exam-show-score').checked = draft.showScoreToStudent !== false;
+            document.getElementById('exam-start').value = draft.startTime || '';
+            document.getElementById('exam-end').value = draft.endTime || '';
+
+            renderLoginFields();
+            renderQuestions();
+        }
+
+        function renderLoginFields() {
+            const container = document.getElementById('login-fields-container');
+            container.innerHTML = '';
+            (window.appState.examDraft.loginFields || []).forEach((field, index) => {
+                container.innerHTML += `
+                    <div class="flex items-center gap-2 mb-2 w-full">
+                        <input type="text" value="${field.label}" onchange="window.updateLoginField(${index}, this.value)" class="flex-1 w-full min-w-0 bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none">
+                        <button onclick="window.removeLoginField(${index})" class="w-10 h-10 shrink-0 bg-rose-50 text-rose-500 rounded-xl hover:bg-rose-100 flex items-center justify-center"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                `;
+            });
+        }
+        
+        window.addLoginField = () => {
+            if(!window.appState.examDraft.loginFields) window.appState.examDraft.loginFields = [];
+            window.appState.examDraft.loginFields.push({ label: 'حقل جديد' });
+            renderLoginFields();
+        };
+        window.updateLoginField = (idx, val) => { window.appState.examDraft.loginFields[idx].label = val; };
+        window.removeLoginField = (idx) => {
+            window.appState.examDraft.loginFields.splice(idx, 1);
+            renderLoginFields();
+        };
+
+        function renderQuestions() {
+            const container = document.getElementById('questions-container');
+            container.innerHTML = '';
+            (window.appState.examDraft.questions || []).forEach((q, qIndex) => {
+                let innerHtml = '';
+                if(q.type === 'mcq' || !q.type) { 
+                    let optionsHtml = '';
+                    (q.options || ['', '', '', '']).forEach((opt, oIndex) => {
+                        optionsHtml += `
+                            <div class="flex items-center gap-3 mb-2 w-full">
+                                <input type="radio" name="correct-${qIndex}" ${q.correctOption === oIndex ? 'checked' : ''} onchange="window.updateCorrectOption(${qIndex}, ${oIndex})" class="w-5 h-5 shrink-0 text-brand-600 focus:ring-brand-500">
+                                <input type="text" value="${opt}" onchange="window.updateOptionText(${qIndex}, ${oIndex}, this.value)" placeholder="نص الاختيار" class="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-brand-500 outline-none">
+                            </div>
+                        `;
+                    });
+                    innerHtml = `
+                        <div class="mb-4">
+                            <label class="block text-xs font-bold text-brand-600 mb-2">الاختيارات (حدد الدائرة للإجابة الصحيحة):</label>
+                            ${optionsHtml}
+                        </div>
+                    `;
+                } else {
+                    innerHtml = `<div class="p-3 bg-blue-50 text-blue-700 text-sm rounded-lg mb-4 flex gap-2 items-start"><i class="fa-solid fa-info-circle mt-0.5 shrink-0"></i> <span>سؤال مقالي: سيظهر للطالب مساحة لكتابة نص طويل.</span></div>`;
+                }
+
+                container.innerHTML += `
+                    <div class="bg-white border border-slate-200 rounded-2xl p-4 md:p-5 mb-4 shadow-sm relative overflow-hidden">
+                        <div class="absolute top-4 left-4 flex gap-2">
+                            <span class="text-[10px] sm:text-xs font-bold px-2 py-1 bg-slate-100 text-slate-500 rounded hidden sm:block">${q.type === 'essay' ? 'مقالي' : 'اختياري'}</span>
+                            <button onclick="window.removeQuestion(${qIndex})" class="text-rose-500 hover:bg-rose-50 w-7 h-7 rounded-lg flex items-center justify-center shrink-0"><i class="fa-solid fa-trash text-sm"></i></button>
+                        </div>
+                        
+                        <div class="mb-4 pr-1 sm:pr-16 w-full">
+                            <label class="block text-sm font-bold text-slate-700 mb-2">نص السؤال ${qIndex + 1}</label>
+                            <textarea onchange="window.updateQuestionText(${qIndex}, this.value)" rows="2" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none resize-none">${q.text || ''}</textarea>
+                        </div>
+                        ${innerHtml}
+                    </div>
+                `;
+            });
+        }
+
+        window.addQuestion = (type) => {
+            if(!window.appState.examDraft.questions) window.appState.examDraft.questions = [];
+            const newQ = type === 'mcq' ? { type: 'mcq', text: '', options: ['اختيار 1', 'اختيار 2', 'اختيار 3', 'اختيار 4'], correctOption: 0 } : { type: 'essay', text: '' };
+            window.appState.examDraft.questions.push(newQ);
+            renderQuestions();
+        };
+
+        window.updateQuestionText = (qIdx, val) => { window.appState.examDraft.questions[qIdx].text = val; };
+        window.updateOptionText = (qIdx, oIdx, val) => { window.appState.examDraft.questions[qIdx].options[oIdx] = val; };
+        window.updateCorrectOption = (qIdx, oIdx) => { window.appState.examDraft.questions[qIdx].correctOption = oIdx; };
+        window.removeQuestion = (qIdx) => { window.appState.examDraft.questions.splice(qIdx, 1); renderQuestions(); };
+
+        window.saveExam = async () => {
+            const draft = window.appState.examDraft;
+            draft.title = document.getElementById('exam-title').value;
+            draft.subject = document.getElementById('exam-subject').value;
+            draft.slug = document.getElementById('exam-slug').value.trim().replace(/[^a-zA-Z0-9-]/g, '');
+            draft.duration = parseInt(document.getElementById('exam-duration').value) || 60;
+            draft.status = document.getElementById('exam-status').value;
+            draft.showScoreToStudent = document.getElementById('exam-show-score').checked;
+            draft.startTime = document.getElementById('exam-start').value;
+            draft.endTime = document.getElementById('exam-end').value;
+
+            if(!draft.title) {
+                alert('الرجاء إدخال عنوان الامتحان على الأقل.');
+                return;
+            }
+
+            const btn = document.getElementById('save-exam-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الحفظ...';
+
+            try {
+                const isNew = !draft.id;
+                const examId = isNew ? "EXAM-" + Date.now() : draft.id;
+
+                // ⚠️ فصل حرج: نبني نسخة "عامة" من الأسئلة بدون أي حقل correctOption
+                // هذه فقط ما يصل لمتصفح الطالب. الإجابات الصحيحة تُخزَّن في مستند منفصل
+                // (exam_answers) لا يقرأه أحد غير الأدمن حسب Firestore Rules.
+                const publicQuestions = (draft.questions || []).map(q => {
+                    if (q.type === 'mcq' || !q.type) {
+                        const { correctOption, ...rest } = q;
+                        return rest;
+                    }
+                    return q;
+                });
+                const answersMap = {};
+                (draft.questions || []).forEach((q, idx) => {
+                    if ((q.type === 'mcq' || !q.type) && typeof q.correctOption === 'number') {
+                        answersMap[idx] = q.correctOption;
+                    }
+                });
+
+                const examData = {
+                    ...draft, questions: publicQuestions,
+                    id: examId, adminId: window.appState.user.uid,
+                    createdAt: isNew ? Date.now() : (draft.createdAt || Date.now())
+                };
+
+                await setDoc(doc(getExamsRef(), examId), examData);
+                await setDoc(doc(db, "exam_answers", examId), { answers: answersMap, updatedAt: Date.now() });
+
+                alert('تم الحفظ بنجاح!');
+                switchPage('list');
+            } catch (error) {
+                console.error("Error saving:", error);
+                alert('حدث خطأ أثناء الحفظ. تأكد من صلاحيات قاعدة البيانات.');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> حفظ الامتحان';
+            }
+        };
+
+        window.deleteExam = async (id) => {
+            if(!confirm('هل أنت متأكد من حذف هذا الامتحان؟ لا يمكن التراجع.')) return;
+            try { await deleteDoc(doc(getExamsRef(), id)); } catch (error) { console.error("Error:", error); alert('حدث خطأ أثناء الحذف.'); }
+        };
+
+        window.openReports = async (examId) => {
+            const exam = window.appState.exams.find(e => e.id === examId);
+            if(!exam) return;
+            
+            document.getElementById('report-exam-title').innerText = exam.title || 'امتحان';
+            document.getElementById('report-exam-title').dataset.examId = examId;
+            
+            const examSubs = window.appState.submissions.filter(s => s.examId === examId && s.status === 'submitted');
+
+            // نجلب مفتاح الإجابات الصحيحة (مستند منفصل) هنا فقط، وقت التصحيح،
+            // ونبني نسخة مؤقتة من الامتحان بالإجابات مدموجة، لاستخدامها في التصحيح فقط.
+            let examWithAnswers = exam;
+            try {
+                const answersSnap = await getDoc(doc(db, "exam_answers", examId));
+                const answersMap = answersSnap.exists() ? (answersSnap.data().answers || {}) : {};
+                examWithAnswers = {
+                    ...exam,
+                    questions: (exam.questions || []).map((q, idx) => {
+                        if (q.type === 'mcq' || !q.type) {
+                            return { ...q, correctOption: answersMap[idx] ?? answersMap[String(idx)] ?? null };
+                        }
+                        return q;
+                    })
+                };
+            } catch (e) {
+                console.error("Could not load answer key for grading:", e);
+                alert('تعذّر تحميل مفتاح الإجابات الصحيحة. لن تظهر الدرجات بشكل صحيح.');
+            }
+            
+            renderReportsStats(examWithAnswers, examSubs);
+            renderSubmissionsList(examWithAnswers, examSubs);
+            switchPage('reports');
+        };
+
+        function renderReportsStats(exam, subs) {
+            document.getElementById('stat-total-subs').innerText = subs.length;
+            if(subs.length === 0) {
+                document.getElementById('stat-avg-score').innerText = '0%';
+                document.getElementById('stat-hardest-q').innerText = '-';
+                return;
+            }
+
+            let totalScorePercent = 0;
+            const questions = exam.questions || [];
+            const mcqQuestions = questions.map((q, i) => ({...q, originalIndex: i})).filter(q => q.type === 'mcq' || !q.type);
+            const totalMcqs = mcqQuestions.length;
+            let mistakesMap = {};
+
+            subs.forEach(sub => {
+                let correctCount = 0;
+                mcqQuestions.forEach(q => {
+                    const studentAns = sub.rawAnswers ? sub.rawAnswers[q.originalIndex] : null;
+                    const correctAns = (q.options && q.options[q.correctOption]) ? q.options[q.correctOption] : null;
+                    if(studentAns === correctAns && correctAns !== null) correctCount++;
+                    else mistakesMap[q.originalIndex] = (mistakesMap[q.originalIndex] || 0) + 1;
+                });
+                if(totalMcqs > 0) totalScorePercent += (correctCount / totalMcqs) * 100;
+            });
+
+            const avg = totalMcqs > 0 ? (totalScorePercent / subs.length).toFixed(1) : 0;
+            document.getElementById('stat-avg-score').innerText = `${avg}%`;
+
+            let hardestQIndex = -1; let maxMistakes = 0;
+            for (const [idx, count] of Object.entries(mistakesMap)) {
+                if (count > maxMistakes) { maxMistakes = count; hardestQIndex = idx; }
+            }
+            document.getElementById('stat-hardest-q').innerText = hardestQIndex !== -1 ? `سؤال ${parseInt(hardestQIndex) + 1}` : '-';
+        }
+
+        function renderSubmissionsList(exam, subs) {
+            const container = document.getElementById('submissions-list');
+            container.innerHTML = '';
+            if (subs.length === 0) {
+                container.innerHTML = `<div class="text-center py-10 text-slate-500 font-bold">لا يوجد تسليمات لهذا الامتحان بعد.</div>`;
+                return;
+            }
+
+            const questions = exam.questions || [];
+            subs.forEach((sub, subIndex) => {
+                let scoreHtml = ''; let questionsHtml = ''; let correctCount = 0;
+                const totalMcqs = questions.filter(q => q.type === 'mcq' || !q.type).length;
+
+                questions.forEach((q, qIndex) => {
+                    const studentAns = sub.rawAnswers ? sub.rawAnswers[qIndex] : null;
+                    if (q.type === 'mcq' || !q.type) {
+                        const correctAnsText = (q.options && q.options[q.correctOption]) ? q.options[q.correctOption] : 'غير محدد';
+                        const isCorrect = studentAns === correctAnsText;
+                        if(isCorrect) correctCount++;
+
+                        questionsHtml += `
+                            <div class="mb-4 border-b border-slate-100 pb-4 last:border-0 w-full overflow-hidden">
+                                <p class="font-bold text-sm text-slate-800 mb-2 whitespace-normal break-words">${qIndex + 1}. ${q.text || 'بدون نص'}</p>
+                                <div class="flex items-start gap-2 text-sm w-full">
+                                    ${isCorrect 
+                                        ? `<i class="fa-solid fa-circle-check text-emerald-500 mt-0.5 shrink-0"></i> <span class="text-emerald-700 truncate">${studentAns || 'لم يجب'}</span>` 
+                                        : `<i class="fa-solid fa-circle-xmark text-rose-500 mt-0.5 shrink-0"></i> 
+                                           <div class="overflow-hidden">
+                                              <span class="text-rose-700 block line-through decoration-rose-300 truncate">${studentAns || 'لم يجب'}</span>
+                                              <span class="text-emerald-600 text-xs block mt-1 truncate"><i class="fa-solid fa-arrow-left fa-sm"></i> الصحيحة: ${correctAnsText}</span>
+                                           </div>`
+                                    }
+                                </div>
+                            </div>
+                        `;
+                    } else {
+                        questionsHtml += `
+                            <div class="mb-4 border-b border-slate-100 pb-4 last:border-0 w-full overflow-hidden">
+                                <p class="font-bold text-sm text-slate-800 mb-2 whitespace-normal break-words">${qIndex + 1}. ${q.text || 'بدون نص'} <span class="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded ml-1 shrink-0">مقالي</span></p>
+                                <div class="bg-slate-50 p-3 rounded-lg text-sm text-slate-700 whitespace-pre-wrap break-words w-full overflow-x-hidden">${studentAns || '<span class="text-slate-400 italic">لم يجب</span>'}</div>
+                            </div>
+                        `;
+                    }
+                });
+
+                if (totalMcqs > 0) {
+                    const scorePercent = ((correctCount / totalMcqs) * 100).toFixed(0);
+                    const scoreColor = scorePercent >= 50 ? 'text-emerald-600 bg-emerald-50 border-emerald-200' : 'text-rose-600 bg-rose-50 border-rose-200';
+                    scoreHtml = `
+                        <div class="flex flex-col items-center justify-center p-2 sm:p-3 rounded-xl border ${scoreColor} min-w-[70px] sm:min-w-[90px] shrink-0">
+                            <span class="text-xl sm:text-2xl font-black">${correctCount}/${totalMcqs}</span>
+                            <span class="text-[10px] sm:text-xs font-bold opacity-80 text-center">الدرجة</span>
+                        </div>
+                    `;
+                }
+
+                let studentDataHtml = '';
+                if(sub.studentData) {
+                    for (const [key, value] of Object.entries(sub.studentData)) {
+                        studentDataHtml += `<div class="text-xs sm:text-sm truncate w-full"><span class="text-slate-500">${key}:</span> <span class="font-bold text-slate-800">${value}</span></div>`;
+                    }
+                }
+
+                const subCard = `
+                    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 print:border-b-4 print:border-black print:mb-10 print:shadow-none print:break-inside-avoid w-full overflow-hidden">
+                        <div class="flex justify-between items-start mb-4 pb-4 border-b border-slate-100 gap-3 w-full">
+                            <div class="overflow-hidden w-full flex-1">
+                                <h4 class="text-base sm:text-lg font-heading font-black text-brand-700 mb-2">ورقة إجابة #${subIndex + 1}</h4>
+                                <div class="flex flex-col gap-1 w-full">
+                                    ${studentDataHtml}
+                                    <div class="text-xs sm:text-sm w-full mt-1 text-slate-500 truncate">التسليم: <span class="font-bold text-slate-700" dir="ltr">${sub.submittedAt ? new Date(sub.submittedAt).toLocaleString('en-GB') : 'غير مسجل'}</span></div>
+                                </div>
+                            </div>
+                            ${scoreHtml}
+                        </div>
+                        <div class="mt-4 w-full">
+                            ${questionsHtml}
+                        </div>
+                    </div>
+                `;
+                container.insertAdjacentHTML('beforeend', subCard);
+            });
+        }
+
+        window.printReports = () => window.print();
+
+    </script>
+    
+    <style>
+        /* منع التمرير الأفقي في كامل الصفحة */
+        body { background-color: #f8fafc; overflow-x: hidden; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        
+        /* Print Styles */
+        @media print {
+            body { background: white; height: auto !important; overflow: auto !important; }
+            #sidebar, #mobile-header, .no-print { display: none !important; }
+            #main-content { margin: 0 !important; padding: 0 !important; width: 100% !important; overflow: visible !important; height: auto !important; }
+            .print\:shadow-none { box-shadow: none !important; }
+            .print\:border-black { border-color: #000 !important; border-width: 2px !important; }
+            .print\:mb-10 { margin-bottom: 2.5rem !important; }
+            .print\:break-inside-avoid { break-inside: avoid; }
+        }
+    </style>
+</head>
+<body class="text-slate-800 antialiased h-[100dvh] flex flex-col overflow-hidden bg-slate-50 w-full">
+
+    <!-- Loading View -->
+    <div id="view-loading" class="fixed inset-0 flex flex-col items-center justify-center bg-brand-50 z-50">
+        <i class="fa-solid fa-circle-notch fa-spin text-5xl text-brand-600 mb-4"></i>
+        <h2 class="text-xl font-heading font-bold text-brand-800">جاري تحميل المنصة...</h2>
+    </div>
+
+    <!-- Login View -->
+    <div id="view-login" class="hidden fixed inset-0 flex flex-col items-center justify-center bg-slate-50 p-4 z-40 overflow-y-auto w-full">
+        <div class="w-full max-w-md bg-white rounded-[2rem] shadow-xl p-6 sm:p-8 border border-slate-100 relative overflow-hidden mx-auto">
+            <div class="absolute top-0 left-0 w-full h-2 bg-brand-500"></div>
+            
+            <div class="text-center mb-8 mt-2">
+                <div class="w-16 h-16 bg-brand-50 text-brand-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-inner">
+                    <i class="fa-solid fa-shield-halved text-2xl"></i>
+                </div>
+                <h1 class="text-2xl font-heading font-black text-slate-900" id="auth-title">تسجيل الدخول</h1>
+                <p class="text-slate-500 text-sm mt-1">لوحة تحكم إدارة الامتحانات</p>
+            </div>
+
+            <div id="auth-error" class="hidden bg-rose-50 text-rose-600 text-sm font-bold p-3 rounded-xl mb-4 text-center border border-rose-100"></div>
+
+            <form id="auth-form" onsubmit="window.handleAuth(event, 'login')" class="space-y-4 w-full">
+                <div class="w-full">
+                    <label class="block text-sm font-bold text-slate-600 mb-2 ml-1">البريد الإلكتروني</label>
+                    <div class="relative w-full">
+                        <i class="fa-solid fa-envelope absolute right-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                        <input type="email" id="email" required class="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pr-11 pl-4 text-slate-800 font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0" placeholder="admin@example.com" dir="ltr">
+                    </div>
+                </div>
+                <div class="w-full">
+                    <label class="block text-sm font-bold text-slate-600 mb-2 ml-1">كلمة المرور</label>
+                    <div class="relative w-full">
+                        <i class="fa-solid fa-lock absolute right-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                        <input type="password" id="password" required class="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pr-11 pl-4 text-slate-800 font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0" placeholder="••••••••" dir="ltr">
+                    </div>
+                </div>
+                
+                <button type="submit" id="auth-btn" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3.5 rounded-xl shadow-md transition-all mt-6">
+                    تسجيل الدخول
+                </button>
+            </form>
+
+            <!--
+                ⚠️ تم حذف خيار "إنشاء حساب جديد" عمداً لأسباب أمنية:
+                أي زائر كان يستطيع إنشاء حساب أدمن لنفسه من هنا مباشرة.
+                لإنشاء حساب أدمن جديد الآن: افتح Firebase Console → Authentication → Add User يدويًا،
+                ثم أضف إيميله داخل دالة isAdmin() في ملف firestore.rules.
+            -->
+        </div>
+    </div>
+
+    <!-- Dashboard View -->
+    <div id="view-dashboard" class="hidden flex-1 w-full h-full relative overflow-hidden flex-col md:flex-row">
+        
+        <!-- Mobile Header -->
+        <div id="mobile-header" class="md:hidden absolute top-0 left-0 right-0 h-16 bg-white border-b border-slate-200 z-20 flex justify-between items-center px-4 shadow-sm w-full shrink-0">
+            <h1 class="text-lg font-heading font-bold text-slate-800">Academics <span class="text-brand-600">Admin</span></h1>
+            <button onclick="toggleMobileMenu()" class="text-slate-600 text-xl w-10 h-10 flex items-center justify-center rounded-lg hover:bg-slate-50"><i class="fa-solid fa-bars"></i></button>
+        </div>
+
+        <!-- Sidebar Mobile Overlay -->
+        <div id="mobile-overlay" onclick="toggleMobileMenu()" class="hidden md:hidden absolute inset-0 bg-slate-900/50 z-20 transition-opacity"></div>
+
+        <!-- Sidebar -->
+        <aside id="mobile-menu" class="absolute md:relative top-0 right-0 bottom-0 w-64 bg-slate-900 text-slate-300 flex flex-col transition-transform duration-300 z-30 translate-x-full md:translate-x-0 shrink-0 shadow-2xl md:shadow-none h-[100dvh] md:h-full">
+            <div class="h-16 flex items-center px-6 border-b border-slate-800/50 bg-slate-950/50 justify-between md:justify-center shrink-0">
+                <h1 class="text-xl font-heading font-black text-white tracking-wide">Academics <span class="text-brand-400">Admin</span></h1>
+                <button onclick="toggleMobileMenu()" class="md:hidden text-slate-400 w-8 h-8 flex items-center justify-center rounded hover:bg-slate-800"><i class="fa-solid fa-xmark text-xl"></i></button>
+            </div>
+            
+            <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+                <p class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-4 px-2">القائمة الرئيسية</p>
+                <button id="btn-nav-list" onclick="switchPage('list')" class="sidebar-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors text-right group bg-brand-500/10 text-brand-400">
+                    <i class="fa-solid fa-layer-group w-5 text-center group-hover:text-brand-400"></i>
+                    <span class="font-bold text-sm">إدارة الامتحانات</span>
+                </button>
+                <button id="btn-nav-form" onclick="openNewExamForm()" class="sidebar-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors text-right group text-slate-300 hover:bg-brand-500/10 hover:text-brand-400">
+                    <i class="fa-solid fa-plus w-5 text-center group-hover:text-brand-400"></i>
+                    <span class="font-bold text-sm">إضافة امتحان جديد</span>
+                </button>
+                <div class="my-4 border-t border-slate-800"></div>
+                <!-- الزر الجديد لطلبات التواصل -->
+                <button id="btn-nav-requests" onclick="switchPage('requests')" class="sidebar-btn w-full flex items-center justify-between px-4 py-3 rounded-xl transition-colors text-right group text-slate-300 hover:bg-brand-500/10 hover:text-brand-400">
+                    <div class="flex items-center gap-3">
+                        <i class="fa-solid fa-envelope-open-text w-5 text-center group-hover:text-brand-400"></i>
+                        <span class="font-bold text-sm">طلبات التواصل</span>
+                    </div>
+                    <span id="requests-badge" class="hidden bg-rose-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full">0</span>
+                </button>
+            </nav>
+
+            <div class="p-4 border-t border-slate-800 bg-slate-950/30 shrink-0">
+                <div class="flex items-center gap-3 px-2 mb-4">
+                    <div class="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center shrink-0">
+                        <i class="fa-solid fa-user-shield text-xs text-brand-400"></i>
+                    </div>
+                    <div class="overflow-hidden">
+                        <p class="text-xs font-bold text-white truncate" id="admin-email-display"></p>
+                        <p class="text-[10px] text-slate-500 truncate">مدير النظام</p>
+                    </div>
+                </div>
+                <button onclick="logout()" class="w-full bg-rose-500/10 text-rose-400 hover:bg-rose-500 hover:text-white transition py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-right-from-bracket"></i> تسجيل خروج
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <main id="main-content" class="flex-1 h-full w-full overflow-y-auto overflow-x-hidden bg-slate-50 pt-16 md:pt-0 relative scroll-smooth">
+            
+            <!-- Page: Exams List -->
+            <div id="page-exams-list" class="p-4 md:p-8 w-full max-w-6xl mx-auto hidden min-h-full">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4 w-full">
+                    <div class="w-full sm:w-auto">
+                        <h2 class="text-2xl font-heading font-black text-slate-900 mb-1">الامتحانات</h2>
+                        <p class="text-sm text-slate-500 font-bold">إدارة الامتحانات المتاحة والمغلقة.</p>
+                    </div>
+                    <button onclick="openNewExamForm()" class="w-full sm:w-auto bg-brand-600 hover:bg-brand-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition flex items-center justify-center gap-2 shrink-0">
+                        <i class="fa-solid fa-plus"></i> امتحان جديد
+                    </button>
+                </div>
+                <div id="exams-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6 w-full"></div>
+            </div>
+
+            <!-- Page: Contact Requests (الصفحة الجديدة) -->
+            <div id="page-requests" class="p-4 md:p-8 w-full max-w-6xl mx-auto hidden min-h-full">
+                <div class="flex flex-col mb-8 gap-1 w-full border-b border-slate-200 pb-6">
+                    <h2 class="text-2xl font-heading font-black text-slate-900">طلبات التواصل</h2>
+                    <p class="text-sm text-slate-500 font-bold">الطلبات المرسلة من صفحة "تواصل معنا" (form.html).</p>
+                </div>
+                <div id="requests-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6 w-full">
+                    <!-- سيتم حقن البطاقات هنا -->
+                </div>
+            </div>
+
+            <!-- Page: Exam Form -->
+            <div id="page-exam-form" class="p-2 sm:p-4 md:p-8 w-full max-w-4xl mx-auto hidden min-h-full pb-8">
+                <div class="flex items-center gap-4 mb-6 md:mb-8 px-2 sm:px-0">
+                    <button onclick="switchPage('list')" class="w-10 h-10 bg-white rounded-xl shadow-sm flex items-center justify-center text-slate-500 hover:text-brand-600 transition shrink-0">
+                        <i class="fa-solid fa-arrow-right"></i>
+                    </button>
+                    <div class="overflow-hidden">
+                        <h2 id="form-title" class="text-xl sm:text-2xl font-heading font-black text-slate-900 mb-1 truncate">إضافة امتحان</h2>
+                        <p class="text-xs sm:text-sm text-slate-500 font-bold truncate">قم بتعبئة بيانات الامتحان والأسئلة.</p>
+                    </div>
+                </div>
+
+                <div class="bg-white sm:rounded-2xl shadow-sm border-y sm:border border-slate-200 flex flex-col w-full">
+                    <div class="p-4 sm:p-6 md:p-8 space-y-6 sm:space-y-8 w-full">
+                        <!-- Section 1 -->
+                        <div class="w-full">
+                            <h3 class="text-base font-bold text-brand-600 mb-4 border-b border-slate-100 pb-2 flex items-center gap-2"><i class="fa-solid fa-circle-info"></i> البيانات الأساسية</h3>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full">
+                                <div class="sm:col-span-2 w-full">
+                                    <label class="block text-sm font-bold text-slate-700 mb-1">عنوان الامتحان *</label>
+                                    <input type="text" id="exam-title" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0" placeholder="مثال: اختبار منتصف الفصل">
+                                </div>
+                                <div class="w-full">
+                                    <label class="block text-sm font-bold text-slate-700 mb-1">المادة</label>
+                                    <input type="text" id="exam-subject" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0">
+                                </div>
+                                <div class="w-full">
+                                    <label class="block text-sm font-bold text-slate-700 mb-1">الرابط الفريد (Slug) *</label>
+                                    <input type="text" id="exam-slug" dir="ltr" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0" placeholder="e.g. math-exam">
+                                </div>
+                                <div class="w-full">
+                                    <label class="block text-sm font-bold text-slate-700 mb-1">المدة (بالدقائق)</label>
+                                    <input type="number" id="exam-duration" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0" value="60">
+                                </div>
+
+                                <div class="w-full">
+                                    <label class="block text-sm font-bold text-slate-700 mb-1">حالة ظهور الامتحان للطالب</label>
+                                    <select id="exam-status" class="w-full bg-slate-50 border border-brand-200 text-brand-900 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0 shadow-sm">
+                                        <option value="active" class="font-bold">🟢 متاح الآن (مفتوح للدخول)</option>
+                                        <option value="upcoming" class="font-bold">🔵 قريباً (يظهر للطلاب كـ 'لم يبدأ بعد')</option>
+                                        <option value="closed" class="font-bold">🔴 مغلق (منتهي ولا يمكن الدخول)</option>
+                                        <option value="hidden" class="font-bold">⚫ مخفي (يدخل فقط من لديه الرابط المباشر)</option>
+                                    </select>
+                                </div>
+
+                                <div class="w-full">
+                                    <label class="block text-sm font-bold text-slate-700 mb-1">وقت الفتح (اختياري/آلي)</label>
+                                    <input type="datetime-local" id="exam-start" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0">
+                                </div>
+                                <div class="w-full">
+                                    <label class="block text-sm font-bold text-slate-700 mb-1">وقت الإغلاق (اختياري/آلي)</label>
+                                    <input type="datetime-local" id="exam-end" class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0">
+                                </div>
+                                <div class="sm:col-span-2 mt-2 w-full">
+                                    <label class="flex items-center gap-3 cursor-pointer bg-slate-50 p-4 rounded-xl border border-slate-200 w-full">
+                                        <input type="checkbox" id="exam-show-score" class="w-5 h-5 shrink-0 text-brand-600 rounded focus:ring-brand-500 cursor-pointer">
+                                        <div class="flex flex-col overflow-hidden w-full">
+                                            <span class="text-sm font-bold text-slate-800 truncate">إظهار النتيجة الآلية للطالب فور الانتهاء</span>
+                                            <span class="text-xs text-slate-500 truncate">للأسئلة الاختيارية فقط.</span>
+                                        </div>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Section 2 -->
+                        <div class="w-full">
+                            <div class="flex justify-between items-center border-b border-slate-100 pb-2 mb-4 w-full">
+                                <h3 class="text-base font-bold text-brand-600 flex items-center gap-2 truncate"><i class="fa-solid fa-address-card shrink-0"></i> بيانات الدخول</h3>
+                                <button onclick="addLoginField()" class="text-xs font-bold text-brand-600 hover:bg-brand-50 px-2 sm:px-3 py-1.5 rounded-lg transition shrink-0 whitespace-nowrap">+ إضافة حقل</button>
+                            </div>
+                            <div id="login-fields-container" class="w-full"></div>
+                        </div>
+
+                        <!-- Section 3 -->
+                        <div class="w-full pb-4">
+                            <div class="flex justify-between items-center border-b border-slate-100 pb-2 mb-4 w-full">
+                                <h3 class="text-base font-bold text-brand-600 flex items-center gap-2 truncate"><i class="fa-solid fa-clipboard-question shrink-0"></i> الأسئلة</h3>
+                                <div class="flex gap-1 sm:gap-2 shrink-0">
+                                    <button onclick="addQuestion('mcq')" class="text-[10px] sm:text-xs font-bold bg-brand-50 text-brand-700 hover:bg-brand-100 px-2 sm:px-3 py-1.5 rounded-lg transition whitespace-nowrap">+ اختياري</button>
+                                    <button onclick="addQuestion('essay')" class="text-[10px] sm:text-xs font-bold bg-slate-100 text-slate-700 hover:bg-slate-200 px-2 sm:px-3 py-1.5 rounded-lg transition whitespace-nowrap">+ مقالي</button>
+                                </div>
+                            </div>
+                            <div id="questions-container" class="w-full"></div>
+                            <div class="text-center mt-4 flex flex-col sm:flex-row gap-2 w-full">
+                                <button onclick="addQuestion('mcq')" class="w-full border-2 border-dashed border-slate-200 text-slate-500 hover:border-brand-300 hover:text-brand-600 font-bold py-3 sm:py-4 rounded-2xl transition bg-slate-50 hover:bg-brand-50 text-sm">أضف سؤال اختياري</button>
+                                <button onclick="addQuestion('essay')" class="w-full border-2 border-dashed border-slate-200 text-slate-500 hover:border-blue-300 hover:text-blue-600 font-bold py-3 sm:py-4 rounded-2xl transition bg-slate-50 hover:bg-blue-50 text-sm">أضف سؤال مقالي</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Form Actions (Fixed at the bottom of the form container) -->
+                    <div class="bg-slate-50 p-4 sm:p-6 border-t border-slate-200 flex justify-end gap-3 sticky bottom-0 z-20 w-full sm:rounded-b-2xl shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
+                        <button onclick="switchPage('list')" class="px-4 sm:px-6 py-2.5 rounded-xl font-bold text-sm text-slate-600 hover:bg-slate-200 transition shrink-0">إلغاء</button>
+                        <button id="save-exam-btn" onclick="saveExam()" class="px-6 sm:px-8 py-2.5 rounded-xl font-bold text-sm bg-brand-600 text-white hover:bg-brand-700 shadow-md transition flex items-center justify-center gap-2 shrink-0 min-w-[120px]">
+                            <i class="fa-solid fa-floppy-disk"></i> حفظ الامتحان
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Page: Reports -->
+            <div id="page-reports" class="p-4 md:p-8 w-full max-w-5xl mx-auto hidden min-h-full">
+                <div class="no-print flex flex-col sm:flex-row items-start sm:items-center justify-between mb-8 gap-4 w-full">
+                    <div class="flex items-center gap-4 w-full sm:w-auto">
+                        <button onclick="switchPage('list')" class="w-10 h-10 shrink-0 bg-white shadow-sm rounded-xl flex items-center justify-center text-slate-500 hover:text-brand-600 transition">
+                            <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                        <div class="overflow-hidden">
+                            <h2 class="text-xl sm:text-2xl font-heading font-black text-slate-900 mb-1 truncate">التقارير والإجابات</h2>
+                            <p id="report-exam-title" class="text-xs sm:text-sm text-brand-600 font-bold bg-brand-50 inline-block px-2 py-0.5 rounded truncate max-w-full">اسم الامتحان</p>
+                        </div>
+                    </div>
+                    <button onclick="printReports()" class="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition flex items-center justify-center gap-2 shrink-0">
+                        <i class="fa-solid fa-print"></i> طباعة كـ PDF
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-8 no-print w-full">
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 flex items-center gap-4 w-full overflow-hidden">
+                        <div class="w-12 h-12 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center text-xl shrink-0"><i class="fa-solid fa-users"></i></div>
+                        <div class="overflow-hidden">
+                            <p class="text-xs sm:text-sm text-slate-500 font-bold mb-1 truncate">إجمالي التسليمات</p>
+                            <p class="text-2xl font-black text-slate-800" id="stat-total-subs">0</p>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 flex items-center gap-4 w-full overflow-hidden">
+                        <div class="w-12 h-12 bg-emerald-50 text-emerald-500 rounded-full flex items-center justify-center text-xl shrink-0"><i class="fa-solid fa-chart-line"></i></div>
+                        <div class="overflow-hidden">
+                            <p class="text-xs sm:text-sm text-slate-500 font-bold mb-1 truncate">متوسط الدرجات (الآلي)</p>
+                            <p class="text-2xl font-black text-slate-800" id="stat-avg-score" dir="ltr">0%</p>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 flex items-center gap-4 w-full overflow-hidden">
+                        <div class="w-12 h-12 bg-rose-50 text-rose-500 rounded-full flex items-center justify-center text-xl shrink-0"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                        <div class="overflow-hidden">
+                            <p class="text-xs sm:text-sm text-slate-500 font-bold mb-1 truncate">السؤال الأكثر خطأً</p>
+                            <p class="text-lg sm:text-xl font-black text-slate-800 truncate" id="stat-hardest-q">-</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="submissions-list" class="space-y-4 sm:space-y-6 w-full"></div>
+            </div>
+
+        </main>
+    </div>
+</body>
+</html>
+

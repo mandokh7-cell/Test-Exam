@@ -1,0 +1,1183 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Academics Al-Zain | منصة الامتحانات الإلكترونية</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- ==================== Firebase SDKs ==================== -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import { getFirestore, collection, getDocs, setDoc, doc, getDoc, serverTimestamp, query, where } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyBd_Q5f62VsOsmD9wjSpV8mGJpefoXYihE",
+            authDomain: "exam-91bae.firebaseapp.com",
+            projectId: "exam-91bae",
+            storageBucket: "exam-91bae.firebasestorage.app",
+            messagingSenderId: "347396759893",
+            appId: "1:347396759893:web:868523de7dd6d63e9c8fdc"
+        };
+        
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        window.db = db;
+        window.auth = auth;
+        window.collection = collection;
+        window.getDocs = getDocs;
+        window.setDoc = setDoc;
+        window.doc = doc;
+        window.getDoc = getDoc;
+        window.serverTimestamp = serverTimestamp;
+        window.query = query;
+        window.where = where;
+
+        // ==================== مزامنة الوقت مع السيرفر ====================
+        // نحسب الفارق بين ساعة جهاز الطالب ووقت سيرفر Firestore الفعلي،
+        // حتى لو الطالب غيّر ساعة جهازه لا يتأثر حساب الوقت المتبقي في الامتحان.
+        window.serverTimeOffsetMs = 0;
+        window.syncServerTime = async () => {
+            try {
+                const uid = auth.currentUser?.uid;
+                if (!uid) return 0;
+                const ref = doc(db, "time_pings", uid);
+                const beforeLocal = Date.now();
+                await setDoc(ref, { pingedAt: serverTimestamp() });
+                const snap = await getDoc(ref);
+                const afterLocal = Date.now();
+                const serverMs = snap.data()?.pingedAt?.toMillis?.();
+                if (serverMs) {
+                    // نعوّض تقريبيًا نصف زمن الرحلة (round-trip) لتقليل خطأ الشبكة
+                    const roundTrip = afterLocal - beforeLocal;
+                    const estimatedServerNow = serverMs + (roundTrip / 2);
+                    window.serverTimeOffsetMs = estimatedServerNow - afterLocal;
+                }
+            } catch (e) {
+                console.warn("Time sync failed, falling back to device clock:", e);
+                window.serverTimeOffsetMs = 0;
+            }
+            return window.serverTimeOffsetMs;
+        };
+        // وقت "موثوق" قدر الإمكان: ساعة الجهاز + الفارق المحسوب مع السيرفر
+        window.trustedNow = () => Date.now() + window.serverTimeOffsetMs;
+
+        window.loadExamsFromFirebase = async () => {
+            const grid = document.getElementById('exams-grid');
+            if(grid) grid.innerHTML = '<div class="col-span-full text-center py-12"><div class="relative w-16 h-16 mx-auto mb-4"><div class="absolute inset-0 border-4 border-brand-100 rounded-full"></div><div class="absolute inset-0 border-4 border-brand-600 rounded-full border-t-transparent animate-spin"></div></div><p class="text-slate-500 font-bold text-lg">جاري تجهيز الاختبارات...</p></div>';
+            
+            try {
+                // استدعاء الامتحانات بجميع الحالات الظاهرة للطلاب
+                const q = query(collection(db, "exams"), where("status", "in", ["active", "closed", "upcoming"]));
+                const querySnapshot = await getDocs(q);
+                
+                window.availableExams = [];
+                querySnapshot.forEach((doc) => {
+                    window.availableExams.push({ id: doc.id, ...doc.data() });
+                });
+
+                window.renderExamCards();
+
+                const urlParams = new URLSearchParams(window.location.search);
+                const examSlug = urlParams.get('exam');
+                if (examSlug) {
+                    const exam = window.availableExams.find(e => e.slug === examSlug);
+                    if (exam) {
+                        window.openExamLogin(exam.id);
+                    } else {
+                        const hiddenQ = query(collection(db, "exams"), where("slug", "==", examSlug));
+                        const hiddenSnap = await getDocs(hiddenQ);
+                        if(!hiddenSnap.empty) {
+                            const hiddenExam = { id: hiddenSnap.docs[0].id, ...hiddenSnap.docs[0].data() };
+                            window.availableExams.push(hiddenExam);
+                            window.openExamLogin(hiddenExam.id);
+                        }
+                    }
+                }
+            } catch (error) {
+                console.error("Error Loading Data:", error);
+                if(grid) grid.innerHTML = '<div class="col-span-full text-center py-10 text-rose-600 font-bold">حدث خطأ في تحميل البيانات. يرجى التأكد من اتصالك بالإنترنت وتحديث الصفحة.</div>';
+            }
+        };
+
+        window.onload = async () => {
+            try {
+                await signInAnonymously(auth); 
+                await window.loadExamsFromFirebase(); 
+            } catch (error) {
+                console.error("Auth Error:", error);
+                await window.loadExamsFromFirebase(); 
+            }
+        };
+    </script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Tajawal', 'sans-serif'],
+                        heading: ['Cairo', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#eff4ff',   
+                            100: '#dbe6fe',  
+                            500: '#3b5bdb',  
+                            600: '#3146b3',  
+                            700: '#293896',  
+                            800: '#232c70',  
+                            900: '#1c2254',  
+                            bg: '#f8fafc' 
+                        }
+                    },
+                    boxShadow: {
+                        'soft': '0 10px 40px -10px rgba(49, 70, 179, 0.08)',
+                        'modal': '0 25px 50px -12px rgba(49, 70, 179, 0.25)',
+                        'premium': '0 25px 50px -12px rgba(0, 0, 0, 0.15)',
+                    }
+                }
+            }
+        }
+    </script>
+    
+    <style>
+        /* منع التحرك الأفقي للشاشة بالكامل */
+        html, body {
+            background-color: #f8fafc;
+            scroll-behavior: smooth;
+            overflow-x: hidden !important; 
+            max-width: 100vw;
+            width: 100%;
+        }
+
+        .card-smooth {
+            background: #ffffff;
+            border-radius: 1.5rem; 
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.03);
+            border: 1px solid #f1f5f9;
+        }
+        .card-smooth:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 25px 50px -12px rgba(49, 70, 179, 0.15);
+            border-color: #dbe6fe;
+        }
+
+        .dropdown-unfold {
+            transform-origin: top;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+        }
+
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f8fafc; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        textarea::-webkit-scrollbar { width: 6px; }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-12px); }
+        }
+        .animate-float { animation: float 5s ease-in-out infinite; }
+    </style>
+</head>
+<body class="flex flex-col min-h-screen text-slate-800 font-sans relative">
+
+    <!-- النافذة المنبثقة -->
+    <div id="custom-modal-overlay" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[100] flex items-center justify-center opacity-0 invisible transition-all duration-300 px-4">
+        <div id="custom-modal" class="bg-white rounded-[2rem] shadow-modal max-w-sm w-full p-8 transform scale-95 translate-y-4 transition-all duration-300 relative border border-slate-100 mx-auto">
+            <div id="modal-icon-container" class="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-5 shadow-sm border border-brand-100 bg-brand-50 text-brand-600 transition-colors">
+                <i id="modal-icon" class="fa-solid fa-bell text-3xl"></i>
+            </div>
+            <div class="text-center mb-8">
+                <h3 id="modal-title" class="text-2xl font-heading font-black text-slate-900 mb-2">تنبيه</h3>
+                <p id="modal-message" class="text-slate-500 font-medium leading-relaxed">رسالة التنبيه تظهر هنا.</p>
+            </div>
+            <div class="flex gap-3">
+                <button id="modal-cancel-btn" onclick="window.closeModal()" class="hidden flex-1 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3.5 px-4 rounded-xl transition-colors duration-200">
+                    إلغاء
+                </button>
+                <button id="modal-confirm-btn" onclick="window.executeModalConfirm()" class="flex-1 bg-brand-600 hover:bg-brand-700 text-white font-bold py-3.5 px-4 rounded-xl shadow-md transition-colors duration-200">
+                    حسناً
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- الهيدر -->
+    <header class="bg-white/90 backdrop-blur-xl sticky top-0 z-50 shadow-sm border-b border-slate-100/50 w-full" id="main-header">
+        <div class="container mx-auto px-4 py-3 flex justify-between items-center relative">
+            
+            <div class="flex items-center gap-2 cursor-pointer group">
+                <a href="index.html" class="flex items-center gap-2.5">
+                    <div class="w-10 h-10 bg-brand-600 text-white rounded-xl flex items-center justify-center transition-all shadow-[0_4px_15px_rgba(49,70,179,0.3)] group-hover:scale-105">
+                        <i class="fa-solid fa-graduation-cap text-base"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-heading font-black text-slate-900 leading-none tracking-wide">
+                            Academics <span class="text-brand-600">Al-Zain</span>
+                        </h1>
+                    </div>
+                </a>
+            </div>
+            
+            <div class="flex items-center gap-3">
+                <div id="student-info-header" class="hidden items-center gap-3 bg-slate-50 px-4 py-2 rounded-2xl border border-slate-200/60 max-w-[200px] sm:max-w-xs">
+                    <div class="w-8 h-8 shrink-0 rounded-full bg-brand-100 text-brand-600 flex items-center justify-center">
+                        <i class="fa-solid fa-user-astronaut text-sm"></i>
+                    </div>
+                    <span class="text-sm font-bold text-slate-800 truncate" id="display-student-name"></span>
+                    <div class="h-5 w-px bg-slate-200 mx-1 shrink-0"></div>
+                    <button onclick="window.exitExam()" class="text-slate-400 hover:text-red-500 transition-colors flex items-center gap-2 shrink-0" title="خروج">
+                        <i class="fa-solid fa-arrow-right-from-bracket"></i> <span class="text-xs font-bold hidden sm:inline">خروج</span>
+                    </button>
+                </div>
+
+                <div class="relative">
+                    <button id="mobile-menu-btn" onclick="window.toggleMenu()" class="w-10 h-10 rounded-xl bg-white text-slate-600 hover:bg-brand-50 hover:text-brand-600 shadow-sm transition-all flex items-center justify-center focus:outline-none border border-slate-200">
+                        <i id="menu-icon" class="fa-solid fa-bars text-base transition-transform duration-300"></i>
+                    </button>
+
+                    <div id="dropdown-menu" class="dropdown-unfold absolute left-0 top-full mt-4 w-60 bg-white shadow-premium rounded-3xl z-50 scale-y-0 opacity-0 invisible overflow-hidden border border-slate-100 p-2">
+                        <ul class="flex flex-col">
+                            <li>
+                                <a href="index.html" class="px-4 py-3.5 hover:bg-brand-50 hover:text-brand-700 text-slate-600 rounded-2xl transition-all flex items-center gap-3 font-bold">
+                                    <div class="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-slate-400"><i class="fa-solid fa-house text-sm"></i></div> الرئيسية
+                                </a>
+                            </li>
+                            <li>
+                                <a href="exams.html" class="px-4 py-3.5 hover:bg-brand-50 hover:text-brand-700 text-slate-600 rounded-2xl transition-all flex items-center gap-3 font-bold mt-1">
+                                    <div class="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-slate-400"><i class="fa-solid fa-file-signature text-sm"></i></div> الامتحانات
+                                </a>
+                            </li>
+                            <li>
+                                <a href="form.html" class="px-4 py-3.5 hover:bg-brand-50 hover:text-brand-700 text-slate-600 rounded-2xl transition-all flex items-center gap-3 font-bold mt-1">
+                                    <div class="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-slate-400"><i class="fa-solid fa-headset text-sm"></i></div> تواصل معنا
+                                </a>
+                            </li>
+                            <li>
+                                <a href="about.html" class="px-4 py-3.5 hover:bg-brand-50 hover:text-brand-700 text-slate-600 rounded-2xl transition-all flex items-center gap-3 font-bold mt-1">
+                                    <div class="w-8 h-8 rounded-full bg-white shadow-sm flex items-center justify-center text-slate-400"><i class="fa-solid fa-circle-info text-sm"></i></div> من نحن
+                                </a>
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- المحتوى الرئيسي -->
+    <main id="main-content" class="flex-grow w-full overflow-hidden">
+        
+        <!-- القسم 1: الصفحة الرئيسية -->
+        <div id="home-view" class="block w-full">
+            
+            <section class="relative bg-gradient-to-b from-white via-slate-50 to-brand-100/60 overflow-hidden pt-20 pb-36 md:pt-28 md:pb-52 w-full">
+                <div class="container mx-auto px-4 relative z-10 text-center flex flex-col items-center max-w-full">
+                    <h2 class="text-3xl min-[400px]:text-4xl sm:text-5xl md:text-6xl lg:text-7xl font-heading font-black text-slate-900 mb-6 leading-tight tracking-tight whitespace-nowrap relative">
+                        امتحاناتك الإلكترونية
+                        <div class="absolute -top-8 -right-8 text-brand-400 opacity-60 rotate-12 hidden md:block animate-float">
+                            <i class="fa-solid fa-sparkles text-3xl"></i>
+                        </div>
+                    </h2>
+                    
+                    <h3 class="text-xl sm:text-2xl md:text-3xl font-bold text-brand-600 mt-2 mb-10 tracking-wide relative inline-block z-10">
+                        أسهل، أسرع، وأكثر أمانًا 
+    
+                        <svg class="absolute w-[105%] h-3 sm:h-4 -bottom-1.5 sm:-bottom-2 -right-[2.5%] text-brand-400/50 -z-10" viewBox="0 0 200 20" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
+                            <path d="M 5 15 Q 100 0 195 15" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+                        </svg>
+                    </h3>
+                    
+                    <p class="text-base sm:text-lg text-slate-500 mb-12 max-w-2xl leading-relaxed font-medium px-4">
+                        نظام إدارة اختبارات متكامل يمنحك القوة والتحكم. بنية تحتية مستقرة، حفظ تلقائي للإجابات، وبيئة آمنة تضمن نزاهة التقييم بأحدث التقنيات.
+                    </p>
+                    
+                    <div class="flex flex-col sm:flex-row items-center gap-4">
+                        <button onclick="window.scrollToExams()" class="w-full sm:w-auto bg-brand-600 text-white hover:bg-brand-700 hover:-translate-y-1 font-bold py-4 px-10 rounded-full shadow-[0_10px_25px_rgba(49,70,179,0.3)] transition-all duration-300 flex items-center justify-center gap-3 text-lg">
+                            ابدأ امتحاناتك الآن <i class="fa-solid fa-arrow-down"></i>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="absolute bottom-0 left-0 w-full overflow-hidden leading-none z-0">
+                    <svg class="relative block w-full h-[60px] md:h-[120px] lg:h-[160px]" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 120" preserveAspectRatio="none">
+                        <path d="M321.39,56.44c58-10.79,114.16-30.13,172-41.86,82.39-16.72,168.19-17.73,250.45-.39C823.78,31,906.67,72,985.66,92.83c70.05,18.48,146.53,26.09,214.34,3V120H0V27.35A600.21,600.21,0,0,0,321.39,56.44Z" fill="#ffffff"></path>
+                    </svg>
+                </div>
+            </section>
+
+            <section class="relative z-20 pb-16 bg-white pt-4 md:pt-8 w-full overflow-hidden">
+                <div class="container mx-auto px-4 relative max-w-full">
+                    <div class="max-w-6xl mx-auto bg-white rounded-t-[2rem] md:rounded-t-[3rem] rounded-b-[2rem] md:rounded-b-[3rem] shadow-premium overflow-hidden border border-slate-200 relative transform transition-transform hover:scale-[1.01] duration-500 z-10 w-full">
+                        <div class="bg-slate-50/80 backdrop-blur-sm border-b border-slate-200 px-6 py-4 flex items-center gap-2">
+                            <div class="w-3.5 h-3.5 rounded-full bg-red-400 shadow-inner shrink-0"></div>
+                            <div class="w-3.5 h-3.5 rounded-full bg-amber-400 shadow-inner shrink-0"></div>
+                            <div class="w-3.5 h-3.5 rounded-full bg-green-400 shadow-inner shrink-0"></div>
+                            <div class="mx-auto bg-white border border-slate-200/60 text-slate-400 text-xs font-mono py-1.5 px-6 rounded-lg hidden md:block flex-grow max-w-md text-center shadow-sm truncate">
+                                <i class="fa-solid fa-lock text-[10px] mr-1 text-brand-400"></i> academics.al-zain.online
+                            </div>
+                        </div>
+                        <div class="relative h-48 sm:h-72 md:h-[450px] w-full bg-slate-100">
+                            <img src="ac.jpg" onerror="this.src='https://images.unsplash.com/photo-1516321318423-f06f85e504b3?q=80&w=2000&auto=format&fit=crop'" alt="واجهة منصة الزين" class="w-full h-full object-cover">
+                            <div class="absolute inset-0 bg-gradient-to-t from-slate-900/20 via-transparent to-transparent"></div>
+                        </div>
+                    </div>
+
+                    <div class="hidden lg:flex absolute -left-10 top-1/2 -translate-y-1/2 bg-white/90 backdrop-blur-xl p-5 rounded-[2rem] shadow-premium border border-white items-center gap-5 z-20 animate-float">
+                        <div class="w-14 h-14 bg-gradient-to-br from-green-100 to-green-50 text-green-600 rounded-2xl flex items-center justify-center text-2xl shadow-sm border border-green-100 shrink-0">
+                            <i class="fa-solid fa-check-double"></i>
+                        </div>
+                        <div>
+                            <p class="text-sm text-slate-500 font-bold mb-0.5 whitespace-nowrap">دقة التقييم</p>
+                            <p class="text-2xl font-black text-slate-800 tracking-tight">عالية</p>
+                        </div>
+                    </div>
+
+                    <div class="hidden lg:flex absolute -right-10 bottom-16 bg-white/90 backdrop-blur-xl p-5 rounded-[2rem] shadow-premium border border-white items-center gap-5 z-20 animate-float-delayed">
+                        <div class="w-14 h-14 bg-gradient-to-br from-brand-100 to-brand-50 text-brand-600 rounded-2xl flex items-center justify-center text-2xl shadow-sm border border-brand-100 shrink-0">
+                            <i class="fa-solid fa-server"></i>
+                        </div>
+                        <div>
+                            <p class="text-sm text-slate-500 font-bold mb-0.5 whitespace-nowrap">استقرار تام</p>
+                            <p class="text-2xl font-black text-slate-800 tracking-tight font-sans">Uptime</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="pb-16 pt-4 bg-white border-b border-slate-100/50 w-full overflow-hidden">
+                <div class="container mx-auto px-4 text-center">
+                    <p class="text-xs font-bold text-slate-400 mb-8 uppercase tracking-[0.2em] px-4 whitespace-normal break-words">منصة مبنية باستخدام أقوى التقنيات العالمية</p>
+                    <div class="flex flex-wrap justify-center items-center gap-10 md:gap-20 opacity-40 grayscale hover:grayscale-0 transition-all duration-700 max-w-full">
+                        <i class="fa-brands fa-google text-4xl hover:text-[#4285F4] transition-colors cursor-pointer"></i>
+                        <i class="fa-brands fa-microsoft text-3xl hover:text-[#00A4EF] transition-colors cursor-pointer"></i>
+                        <i class="fa-brands fa-aws text-[2.5rem] hover:text-[#FF9900] transition-colors cursor-pointer"></i>
+                        <i class="fa-solid fa-shield-halved text-3xl hover:text-brand-600 transition-colors cursor-pointer"></i>
+                        <i class="fa-solid fa-database text-3xl hover:text-brand-600 transition-colors cursor-pointer"></i>
+                    </div>
+                </div>
+            </section>
+
+            <section id="exams-section" class="py-24 bg-slate-50 relative overflow-hidden border-b border-slate-200 w-full">
+                <div class="container mx-auto px-4 relative z-10 max-w-full">
+                    <div class="flex flex-col items-center mb-16 relative">
+                        <h3 class="text-3xl md:text-4xl font-heading font-black text-slate-900 mb-4 z-10">الامتحانات المجدولة</h3>
+                        <div class="w-16 h-1.5 bg-brand-600 rounded-full z-10"></div>
+                        <div class="absolute text-7xl md:text-8xl font-black text-slate-200/40 -top-8 select-none z-0 tracking-widest uppercase truncate max-w-full">EXAMS</div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8 max-w-6xl mx-auto w-full" id="exams-grid">
+                        <!-- سيتم حقن البطاقات هنا -->
+                    </div>
+
+                    <div id="view-more-container" class="text-center mt-14 hidden">
+                        <a href="exams.html" class="inline-flex items-center justify-center gap-3 bg-white text-slate-700 hover:text-brand-700 hover:bg-slate-50 font-bold py-4 px-10 rounded-full shadow-sm border border-slate-200 hover:border-brand-200 transition-all duration-300 max-w-[90vw]">
+                            عرض كل الامتحانات <i class="fa-solid fa-arrow-left"></i>
+                        </a>
+                    </div>
+                </div>
+            </section>
+
+            <section id="features-section" class="py-24 bg-white relative overflow-hidden w-full">
+                <div class="absolute top-0 right-0 w-64 h-64 bg-slate-50 rounded-full -translate-y-1/2 translate-x-1/2"></div>
+                <div class="absolute bottom-0 left-0 w-80 h-80 bg-brand-50 rounded-full translate-y-1/2 -translate-x-1/3"></div>
+
+                <div class="container mx-auto px-4 relative z-10 max-w-full">
+                    <div class="text-center mb-16 px-2">
+                        <span class="text-brand-600 font-bold text-sm tracking-widest uppercase mb-3 block">البنية التحتية</span>
+                        <h3 class="text-3xl md:text-4xl font-heading font-black text-slate-900 mb-5">لماذا تعتمد علينا ؟</h3>
+                        <p class="text-slate-500 font-medium text-lg max-w-2xl mx-auto leading-relaxed">معايير تقنية حديثة صُممت لتتحمل الضغط العالي وتوفر تجربة سلسة للطالب والمعلم على حد سواء.</p>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-6xl mx-auto w-full">
+                        <div class="bg-white rounded-[2.5rem] p-10 text-right flex flex-col transition-all duration-500 hover:-translate-y-2 border border-slate-100 shadow-sm hover:shadow-premium relative overflow-hidden group">
+                            <div class="absolute -right-4 -top-8 text-[10rem] font-black text-slate-50/60 group-hover:text-brand-50/50 transition-colors duration-500 z-0 select-none">1</div>
+                            <div class="relative z-10">
+                                <div class="w-16 h-16 bg-white text-brand-600 rounded-2xl flex items-center justify-center mb-8 shadow-sm border border-slate-100 group-hover:bg-brand-600 group-hover:text-white transition-colors duration-500 shrink-0">
+                                    <i class="fa-solid fa-shield-halved text-2xl"></i>
+                                </div>
+                                <h4 class="text-2xl font-black text-slate-800 mb-4 font-heading">حماية وموثوقية</h4>
+                                <p class="text-slate-500 leading-relaxed font-medium">آليات حماية متقدمة لضمان استقرار جلسة الاختبار للطلاب وتوفير بيئة عادلة ومنظمة للتقييم تمنع محاولات الغش.</p>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-[2.5rem] p-10 text-right flex flex-col transition-all duration-500 hover:-translate-y-2 border border-slate-100 shadow-sm hover:shadow-premium relative overflow-hidden group">
+                            <div class="absolute -right-4 -top-8 text-[10rem] font-black text-slate-50/60 group-hover:text-brand-50/50 transition-colors duration-500 z-0 select-none">2</div>
+                            <div class="relative z-10">
+                                <div class="w-16 h-16 bg-white text-brand-600 rounded-2xl flex items-center justify-center mb-8 shadow-sm border border-slate-100 group-hover:bg-brand-600 group-hover:text-white transition-colors duration-500 shrink-0">
+                                    <i class="fa-solid fa-floppy-disk text-2xl"></i>
+                                </div>
+                                <h4 class="text-2xl font-black text-slate-800 mb-4 font-heading">حفظ تلقائي لحظي</h4>
+                                <p class="text-slate-500 leading-relaxed font-medium">يتم حفظ إجابات الطالب في المتصفح وعلى السيرفر بشكل لحظي (Real-time) لضمان عدم ضياع الإجابات.</p>
+                            </div>
+                        </div>
+                        <div class="bg-white rounded-[2.5rem] p-10 text-right flex flex-col transition-all duration-500 hover:-translate-y-2 border border-slate-100 shadow-sm hover:shadow-premium relative overflow-hidden group">
+                            <div class="absolute -right-4 -top-8 text-[10rem] font-black text-slate-50/60 group-hover:text-brand-50/50 transition-colors duration-500 z-0 select-none">3</div>
+                            <div class="relative z-10">
+                                <div class="w-16 h-16 bg-white text-brand-600 rounded-2xl flex items-center justify-center mb-8 shadow-sm border border-slate-100 group-hover:bg-brand-600 group-hover:text-white transition-colors duration-500 shrink-0">
+                                    <i class="fa-solid fa-bolt text-2xl"></i>
+                                </div>
+                                <h4 class="text-2xl font-black text-slate-800 mb-4 font-heading">سرعة وأداء فائق</h4>
+                                <p class="text-slate-500 leading-relaxed font-medium">المنصة مبنية بأحدث تقنيات الويب لتكون خفيفة وسريعة التجاوب مع كافة الأجهزة وبدون أي بطء.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="py-24 bg-slate-50 border-t border-slate-100 w-full overflow-hidden">
+                <div class="container mx-auto px-4 max-w-full">
+                    <div class="bg-white rounded-[3rem] shadow-premium p-8 md:p-20 flex flex-col md:flex-row items-center justify-between gap-12 max-w-5xl mx-auto relative overflow-hidden border border-slate-100">
+                        <div class="absolute -top-24 -left-24 w-72 h-72 bg-brand-50 rounded-full blur-[80px] opacity-70"></div>
+                        <div class="text-center md:text-right flex-1 relative z-10 w-full">
+                            <span class="inline-flex items-center justify-center gap-2 bg-slate-50 text-slate-600 px-5 py-2 rounded-full text-sm font-bold mb-6 border border-slate-200/60">
+                                <i class="fa-solid fa-building text-xs text-brand-500"></i> للمؤسسات والمعلمين
+                            </span>
+                            <h3 class="text-3xl md:text-5xl font-heading font-black text-slate-900 mb-5 leading-tight">
+                                ارتقِ بمستوى تقييم طلابك الآن
+                            </h3>
+                            <p class="text-slate-500 text-lg leading-relaxed font-medium max-w-2xl mx-auto md:mx-0 px-2">
+                                احصل على بيئة مخصصة لطلابك، تدير الامتحانات، تراقب الأداء، وتُصدر النتائج بسهولة تامة واحترافية.
+                            </p>
+                        </div>
+                        <div class="flex-shrink-0 w-full md:w-auto relative z-10">
+                            <a href="form.html" class="block w-full text-center bg-slate-900 text-white hover:bg-brand-600 hover:-translate-y-1 font-bold py-4 px-12 rounded-full shadow-lg transition-all duration-300 text-lg">
+                                تواصل معنا <i class="fa-solid fa-arrow-left mr-2"></i>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+        <!-- القسم 2: تسجيل الدخول للامتحان -->
+        <div id="login-view" class="hidden container mx-auto p-4 flex items-center justify-center min-h-[85vh] py-12 max-w-full overflow-hidden">
+            <div class="bg-white rounded-[2.5rem] shadow-premium w-full max-w-md overflow-hidden relative border border-slate-100">
+                <div class="bg-slate-900 px-6 py-10 text-center relative overflow-hidden w-full">
+                    <div class="absolute -right-4 -top-4 text-white/5 text-8xl"><i class="fa-solid fa-ticket"></i></div>
+                    
+                    <div class="w-16 h-16 shrink-0 bg-white/10 backdrop-blur-sm text-white rounded-2xl flex items-center justify-center mx-auto mb-4 border border-white/20 shadow-inner">
+                        <i class="fa-solid fa-file-signature text-2xl"></i>
+                    </div>
+                    <h2 class="text-2xl font-heading font-black text-white mb-3 tracking-wide break-words whitespace-pre-wrap px-2" id="login-exam-title">عنوان الامتحان</h2>
+                    
+                    <div class="flex flex-wrap items-center justify-center gap-3 text-sm font-bold text-slate-300 px-2">
+                        <span class="bg-white/10 px-4 py-1.5 rounded-lg backdrop-blur-sm truncate max-w-[150px]" id="login-exam-subject">المادة</span>
+                        <span class="flex items-center gap-1.5 bg-white/10 px-4 py-1.5 rounded-lg backdrop-blur-sm shrink-0"><i class="fa-regular fa-clock"></i> <span id="login-exam-duration"></span> د</span>
+                    </div>
+                </div>
+
+                <div class="relative h-6 bg-white flex items-center justify-between -mt-3 w-full">
+                    <div class="w-6 h-6 shrink-0 bg-[#f8fafc] rounded-full -ml-3 shadow-inner"></div>
+                    <div class="flex-grow border-t-2 border-dashed border-slate-200"></div>
+                    <div class="w-6 h-6 shrink-0 bg-[#f8fafc] rounded-full -mr-3 shadow-inner"></div>
+                </div>
+                
+                <div class="px-6 pb-10 pt-4 w-full">
+                    <div class="space-y-5 w-full" id="dynamic-login-fields">
+                        <!-- سيتم حقن الحقول هنا -->
+                    </div>
+
+                    <div class="pt-8 w-full">
+                        <button onclick="window.startExamProcess()" class="w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-4 px-4 rounded-2xl shadow-[0_8px_20px_rgba(49,70,179,0.25)] transition-all duration-300 hover:-translate-y-1 flex justify-center items-center gap-3 text-lg">
+                            بدء الاختبار <i class="fa-solid fa-play text-sm"></i>
+                        </button>
+                        <button onclick="window.showHomePage()" class="w-full mt-3 bg-transparent text-slate-400 hover:text-slate-700 font-bold py-3 px-4 rounded-2xl transition-colors duration-200 hover:bg-slate-50">
+                            العودة للرئيسية
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- القسم 3: واجهة الامتحان -->
+        <div id="exam-view" class="hidden min-h-screen bg-slate-50 py-6 md:py-10 w-full overflow-x-hidden">
+            <div class="container mx-auto px-4 max-w-4xl relative w-full">
+                
+                <div class="sticky top-4 z-40 bg-white/80 backdrop-blur-xl rounded-2xl shadow-sm border border-white/50 p-4 md:p-5 mb-8 flex flex-row justify-between items-center gap-4 transition-all duration-300 w-full" id="exam-sticky-header">
+                    <div class="flex-grow max-w-[50%] sm:max-w-xs w-full">
+                        <div class="flex justify-between text-[11px] md:text-xs font-bold text-slate-500 mb-2 px-1">
+                            <span>التقدم في الإجابة</span>
+                            <span><span id="answered-count" class="text-brand-600 font-black">0</span> / <span id="total-questions-num">0</span></span>
+                        </div>
+                        <div class="w-full bg-slate-100/80 h-2.5 rounded-full overflow-hidden shadow-inner">
+                            <div id="progress-bar" class="bg-gradient-to-r from-brand-500 to-brand-600 h-2.5 rounded-full transition-all duration-500 ease-out shadow-[0_0_10px_rgba(49,70,179,0.5)]" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-white shadow-sm text-slate-700 px-4 md:px-6 py-2.5 rounded-xl flex items-center justify-center gap-2.5 font-mono text-xl md:text-2xl font-black border border-slate-100 transition-colors duration-300 shrink-0" id="timer-container">
+                        <i class="fa-regular fa-clock text-slate-400 text-lg md:text-xl" id="timer-icon"></i>
+                        <span id="timer-display" class="tracking-widest mt-1">00:00</span>
+                    </div>
+                </div>
+
+                <div class="bg-white p-6 md:p-14 shadow-premium rounded-[2.5rem] mb-8 min-h-[400px] flex flex-col relative border border-slate-50 w-full overflow-hidden">
+                    <div class="absolute top-12 bottom-12 right-0 w-1.5 bg-brand-50 rounded-l-full hidden sm:block"></div>
+
+                    <div class="flex flex-wrap items-center gap-4 mb-8 w-full">
+                        <div class="w-12 h-12 shrink-0 bg-slate-50 text-slate-600 flex flex-col items-center justify-center font-black rounded-2xl border border-slate-100 shadow-inner">
+                            <span class="text-[9px] opacity-70 mb-0.5 uppercase tracking-wider">سؤال</span>
+                            <span id="current-question-num" class="text-lg leading-none">1</span>
+                        </div>
+                        <div id="question-type-badge" class="text-xs font-bold px-3 py-1.5 bg-brand-50 text-brand-600 rounded-lg border border-brand-100/50 shrink-0">
+                        </div>
+                    </div>
+
+                    <h3 id="question-text" class="text-2xl md:text-3xl lg:text-4xl font-heading font-black text-slate-900 mb-12 leading-[1.6] md:leading-[1.7] break-words whitespace-pre-wrap w-full">
+                        جاري تحميل السؤال...
+                    </h3>
+
+                    <div id="options-container" class="space-y-4 flex-grow w-full overflow-hidden">
+                    </div>
+                </div>
+
+                <div class="flex justify-between items-center px-2 md:px-4 w-full gap-2">
+                    <button id="prev-btn" onclick="window.prevQuestion()" class="bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-800 font-bold py-3 px-4 sm:py-4 sm:px-8 rounded-2xl transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed shadow-sm border border-slate-200 flex items-center gap-2 shrink-0">
+                        <i class="fa-solid fa-angle-right text-sm"></i> <span class="hidden sm:inline">السابق</span>
+                    </button>
+                    
+                    <button id="next-btn" onclick="window.nextQuestion()" class="flex-grow sm:flex-grow-0 sm:min-w-[200px] bg-slate-900 hover:bg-black text-white font-bold py-3 sm:py-4 px-6 sm:px-10 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 hover:-translate-y-1 flex items-center justify-center gap-2">
+                        التالي <i class="fa-solid fa-angle-left text-sm"></i>
+                    </button>
+                    
+                    <button id="submit-btn" onclick="window.confirmSubmit()" class="hidden flex-grow sm:flex-grow-0 sm:min-w-[200px] bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 sm:py-4 px-6 sm:px-10 rounded-2xl shadow-[0_10px_20px_rgba(49,70,179,0.3)] hover:-translate-y-1 transition-all duration-200 flex items-center justify-center gap-2">
+                        إنهاء وتسليم <i class="fa-solid fa-check"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- القسم 4: شاشة النهاية -->
+        <div id="end-view" class="hidden container mx-auto p-4 flex items-center justify-center min-h-[80vh] w-full overflow-hidden">
+            <div class="bg-white p-8 md:p-16 rounded-[3rem] shadow-premium w-full max-w-lg text-center border border-slate-100">
+                <div class="w-24 h-24 shrink-0 bg-green-50 text-green-500 rounded-full flex items-center justify-center mx-auto mb-8 border-[6px] border-white shadow-[0_0_0_1px_#dcfce7]">
+                    <i class="fa-solid fa-check text-5xl"></i>
+                </div>
+                <h2 class="text-3xl md:text-4xl font-heading font-black text-slate-900 mb-4">تم التسليم بنجاح</h2>
+                <p class="text-slate-500 mb-10 font-medium text-lg px-2 break-words">
+                    عمل رائع يا <span id="end-student-name" class="font-bold text-slate-800"></span> تم حفظ جميع إجاباتك بأمان.
+                </p>
+                
+                <div class="bg-slate-50 p-6 rounded-3xl mb-8 border border-slate-100 relative overflow-hidden w-full">
+                    <div class="absolute top-0 right-0 w-16 h-16 bg-white/40 rounded-full -mr-8 -mt-8"></div>
+                    <p class="text-sm text-slate-400 font-bold mb-2 uppercase tracking-widest">رقم الاستمارة المرجعي</p>
+                    <p class="font-mono text-xl sm:text-2xl font-black text-slate-800 tracking-wider truncate" id="submission-id-display"></p>
+                </div>
+                
+                <div id="score-display-container" class="hidden bg-brand-50 p-6 rounded-3xl mb-10 border border-brand-100/50 w-full">
+                    <p class="text-sm text-brand-600 font-bold mb-2">النتيجة - الأسئلة الاختيارية</p>
+                    <p class="font-black text-4xl text-brand-600" id="student-score-text"></p>
+                </div>
+                
+                <button onclick="window.showHomePage()" class="bg-slate-900 hover:bg-black text-white font-bold py-4.5 px-8 rounded-2xl transition-all duration-300 w-full text-lg shadow-lg hover:-translate-y-1">
+                    العودة للرئيسية
+                </button>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- الفوتر -->
+    <footer id="main-footer" class="bg-slate-900 text-slate-300 pt-16 pb-8 mt-auto rounded-t-[3rem] border-t border-slate-800 transition-opacity duration-300 w-full overflow-hidden">
+        <div class="container mx-auto px-6 max-w-full">
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-10 mb-12">
+                
+                <div class="md:col-span-5 lg:col-span-4">
+                    <div class="flex items-center gap-2 mb-6 cursor-pointer group w-fit">
+                        <div class="w-10 h-10 shrink-0 bg-white/10 text-white rounded-xl flex items-center justify-center transition-all group-hover:bg-brand-500 border border-white/10">
+                            <i class="fa-solid fa-graduation-cap text-sm"></i>
+                        </div>
+                        <h2 class="text-xl font-heading font-bold text-white tracking-wide">Academics <span class="text-brand-400 font-black">Al-Zain</span></h2>
+                    </div>
+                    <p class="text-slate-400 text-sm leading-relaxed mb-6 font-medium pr-2">
+                        منصة تقييم أكاديمي موثوقة، مصممة لضمان كفاءة ونزاهة الاختبارات الإلكترونية بأعلى معايير الأمان والاستقرار وبواجهة استخدام عصرية.
+                    </p>
+                </div>
+                
+                <div class="hidden lg:block lg:col-span-2"></div>
+                
+                <div class="md:col-span-4 lg:col-span-3">
+                    <h4 class="text-white font-bold text-base mb-6">تصفح المنصة</h4>
+                    <ul class="space-y-4 text-sm text-slate-400 font-medium">
+                        <li><a href="index.html" class="hover:text-brand-400 transition-colors flex items-center gap-3"><div class="w-6 shrink-0 text-center"><i class="fa-solid fa-house"></i></div> الرئيسية</a></li>
+                        <li><a href="exams.html" class="hover:text-brand-400 transition-colors flex items-center gap-3"><div class="w-6 shrink-0 text-center"><i class="fa-solid fa-file-signature"></i></div> الامتحانات</a></li>
+                    </ul>
+                </div>
+                
+                <div class="md:col-span-3 lg:col-span-3">
+                    <h4 class="text-white font-bold text-base mb-6">السياسات والدعم</h4>
+                    <ul class="space-y-4 text-sm text-slate-400 font-medium">
+                        <li><a href="form.html" class="hover:text-brand-400 transition-colors flex items-center gap-3"><div class="w-6 shrink-0 text-center"><i class="fa-solid fa-headset"></i></div> تواصل معنا</a></li>
+                        <li><a href="about.html" class="hover:text-brand-400 transition-colors flex items-center gap-3"><div class="w-6 shrink-0 text-center"><i class="fa-solid fa-circle-info"></i></div> من نحن</a></li>
+                        <li><a href="privacy.html" class="hover:text-brand-400 transition-colors flex items-center gap-3"><div class="w-6 shrink-0 text-center"><i class="fa-solid fa-shield-halved"></i></div> سياسة الخصوصية</a></li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div class="border-t border-slate-800/80 pt-8 flex flex-col items-center gap-3 text-sm text-slate-500 font-bold text-center">
+                <p>&copy; 2026 جميع الحقوق محفوظة لمنصة Academics Al-Zain.</p>
+                <p dir="ltr" class="flex items-center gap-2 justify-center mt-1">
+                    <span class="text-slate-600">Web Developer By</span> 
+                    <a href="https://al-zain.site" target="_blank" class="text-brand-400 hover:text-white transition-colors inline-flex items-center gap-1.5 underline underline-offset-4 decoration-2 decoration-brand-400/30">
+                        Al-Zain <i class="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
+                    </a>
+                </p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // === نظام النوافذ المنبثقة ===
+        let modalConfirmCallback = null;
+
+        window.showModal = (title, message, type = 'info', onConfirm = null) => {
+            const modal = document.getElementById('custom-modal');
+            const overlay = document.getElementById('custom-modal-overlay');
+            const titleEl = document.getElementById('modal-title');
+            const messageEl = document.getElementById('modal-message');
+            const iconContainer = document.getElementById('modal-icon-container');
+            const iconEl = document.getElementById('modal-icon');
+            const cancelBtn = document.getElementById('modal-cancel-btn');
+            const confirmBtn = document.getElementById('modal-confirm-btn');
+
+            titleEl.innerText = title;
+            messageEl.innerText = message;
+            modalConfirmCallback = onConfirm;
+
+            iconContainer.className = 'w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-5 shadow-sm border shrink-0 ';
+            confirmBtn.className = 'flex-1 font-bold py-3.5 px-4 rounded-xl shadow-md transition-colors duration-200 text-white ';
+
+            if (type === 'confirm') {
+                iconContainer.classList.add('bg-brand-50', 'text-brand-600', 'border-brand-100');
+                iconEl.className = 'fa-solid fa-circle-question text-3xl';
+                confirmBtn.classList.add('bg-brand-600', 'hover:bg-brand-700');
+                confirmBtn.innerText = 'نعم، متأكد';
+                cancelBtn.classList.remove('hidden');
+                cancelBtn.classList.add('block');
+            } else if (type === 'warning') {
+                iconContainer.classList.add('bg-amber-50', 'text-amber-500', 'border-amber-100');
+                iconEl.className = 'fa-solid fa-triangle-exclamation text-3xl';
+                confirmBtn.classList.add('bg-amber-500', 'hover:bg-amber-600');
+                confirmBtn.innerText = 'حسناً';
+                cancelBtn.classList.remove('block');
+                cancelBtn.classList.add('hidden');
+            } else if (type === 'error') {
+                iconContainer.classList.add('bg-rose-50', 'text-rose-500', 'border-rose-100');
+                iconEl.className = 'fa-solid fa-circle-xmark text-3xl';
+                confirmBtn.classList.add('bg-rose-500', 'hover:bg-rose-600');
+                confirmBtn.innerText = 'حسناً';
+                cancelBtn.classList.remove('block');
+                cancelBtn.classList.add('hidden');
+            } else { 
+                iconContainer.classList.add('bg-brand-50', 'text-brand-600', 'border-brand-100');
+                iconEl.className = 'fa-solid fa-bell text-3xl';
+                confirmBtn.classList.add('bg-brand-600', 'hover:bg-brand-700');
+                confirmBtn.innerText = 'حسناً';
+                cancelBtn.classList.remove('block');
+                cancelBtn.classList.add('hidden');
+            }
+
+            overlay.classList.remove('opacity-0', 'invisible');
+            modal.classList.remove('scale-95', 'translate-y-4');
+            modal.classList.add('scale-100', 'translate-y-0');
+        };
+
+        window.closeModal = () => {
+            const overlay = document.getElementById('custom-modal-overlay');
+            const modal = document.getElementById('custom-modal');
+
+            overlay.classList.add('opacity-0', 'invisible');
+            modal.classList.remove('scale-100', 'translate-y-0');
+            modal.classList.add('scale-95', 'translate-y-4');
+            modalConfirmCallback = null;
+        };
+
+        window.executeModalConfirm = () => {
+            if (modalConfirmCallback) modalConfirmCallback();
+            window.closeModal();
+        };
+
+        // === منطق القائمة ===
+        let isMenuOpen = false;
+
+        window.toggleMenu = () => {
+            const menu = document.getElementById('dropdown-menu');
+            const icon = document.getElementById('menu-icon');
+            
+            isMenuOpen = !isMenuOpen;
+            
+            if (isMenuOpen) {
+                menu.classList.remove('scale-y-0', 'opacity-0', 'invisible');
+                menu.classList.add('scale-y-100', 'opacity-100', 'visible');
+                icon.classList.remove('fa-bars');
+                icon.classList.add('fa-xmark');
+                icon.style.transform = 'rotate(90deg)'; 
+            } else {
+                menu.classList.remove('scale-y-100', 'opacity-100', 'visible');
+                menu.classList.add('scale-y-0', 'opacity-0', 'invisible');
+                icon.classList.remove('fa-xmark');
+                icon.classList.add('fa-bars');
+                icon.style.transform = 'rotate(0deg)';
+            }
+        };
+
+        document.addEventListener('click', (event) => {
+            const menu = document.getElementById('dropdown-menu');
+            const btn = document.getElementById('mobile-menu-btn');
+            if (isMenuOpen && !menu.contains(event.target) && !btn.contains(event.target)) {
+                window.toggleMenu();
+            }
+        });
+
+        window.scrollToExams = () => {
+            document.getElementById('exams-section').scrollIntoView({ behavior: 'smooth' });
+        };
+
+        // === منطق الامتحان (التحكم اليدوي المطلق) ===
+        window.availableExams = []; 
+        let selectedExam = null;
+        let currentStudentData = {};
+        let currentQuestionIndex = 0;
+        let studentAnswers = {};
+        let currentStudentKey = '';
+        let timerInterval;
+        let examEndTime;
+
+        const views = {
+            home: document.getElementById('home-view'),
+            login: document.getElementById('login-view'),
+            exam: document.getElementById('exam-view'),
+            end: document.getElementById('end-view')
+        };
+        const studentInfoHeader = document.getElementById('student-info-header');
+        const mainFooter = document.getElementById('main-footer');
+
+        window.switchView = (viewName) => {
+            Object.values(views).forEach(v => v.classList.add('hidden'));
+            views[viewName].classList.remove('hidden');
+            
+            if (viewName === 'exam') {
+                studentInfoHeader.classList.remove('hidden');
+                studentInfoHeader.classList.add('flex');
+                mainFooter.classList.add('hidden'); 
+            } else {
+                studentInfoHeader.classList.add('hidden');
+                studentInfoHeader.classList.remove('flex');
+                mainFooter.classList.remove('hidden'); 
+            }
+            window.scrollTo(0, 0);
+        };
+
+        window.handleExitRequest = (targetAction) => {
+            if (!views.exam.classList.contains('hidden')) {
+                window.showModal(
+                    'تأكيد الخروج',
+                    'الخروج الآن سيؤدي لفقدان الجلسة الحالية للامتحان. هل أنت متأكد من الخروج؟',
+                    'confirm',
+                    () => {
+                        clearInterval(timerInterval);
+                        localStorage.removeItem(window.getStorageKey());
+                        targetAction();
+                    }
+                );
+            } else {
+                targetAction();
+            }
+        };
+
+        window.showHomePage = () => {
+            window.handleExitRequest(() => {
+                window.switchView('home');
+                window.renderExamCards();
+            });
+        };
+
+        window.exitExam = () => {
+            window.showHomePage();
+        };
+
+        window.renderExamCards = () => {
+            const grid = document.getElementById('exams-grid');
+            const viewMoreContainer = document.getElementById('view-more-container');
+            if(!grid) return;
+            grid.innerHTML = '';
+
+            const visibleExams = window.availableExams.filter(e => e.status !== 'hidden');
+            const examsToDisplay = visibleExams.slice(0, 3);
+
+            if(visibleExams.length === 0) {
+                grid.innerHTML = `<div class="col-span-full text-center py-10 text-slate-500 font-bold text-lg">لا توجد امتحانات متاحة حالياً.</div>`;
+                if(viewMoreContainer) viewMoreContainer.classList.add('hidden');
+                return;
+            }
+
+            examsToDisplay.forEach(exam => {
+                // الاعتماد الحصري على الحالة اليدوية فقط بدون تدخل الوقت
+                let isAvailable = false;
+                let statusMessage = "";
+                let badgeClass = "";
+                let btnClass = "bg-slate-50 text-brand-700 border border-brand-100 hover:bg-brand-600 hover:text-white cursor-pointer";
+                let btnText = "دخول الامتحان";
+                let pulseHtml = '';
+
+                if (exam.status === 'active') {
+                    isAvailable = true;
+                    statusMessage = "متاح الآن";
+                    badgeClass = "text-brand-600 bg-brand-50 border-brand-100";
+                    pulseHtml = '<i class="fa-solid fa-circle text-[8px] animate-pulse shrink-0"></i> ';
+                } else if (exam.status === 'upcoming') {
+                    isAvailable = false;
+                    statusMessage = "قريبًا";
+                    badgeClass = "text-blue-600 bg-blue-50 border-blue-100";
+                    pulseHtml = '<i class="fa-solid fa-clock text-[10px] shrink-0"></i> ';
+                    btnText = "لم يبدأ بعد";
+                } else if (exam.status === 'closed') {
+                    isAvailable = false;
+                    statusMessage = "مغلق";
+                    badgeClass = "text-rose-600 bg-rose-50 border-rose-100";
+                    pulseHtml = '<i class="fa-solid fa-lock text-[10px] shrink-0"></i> ';
+                    btnText = "مغلق";
+                }
+
+                if (!isAvailable) {
+                    btnClass = "bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed opacity-70";
+                }
+                
+                const statusHtml = `<span class="${badgeClass} text-xs font-bold flex items-center gap-1.5 px-3 py-1 rounded-full shrink-0">${pulseHtml} ${statusMessage}</span>`;
+                
+                const cardHtml = `
+                    <div class="card-smooth p-7 md:p-8 flex flex-col h-full group w-full overflow-hidden border border-slate-200">
+                        <div class="flex justify-between items-center mb-6 w-full gap-2">
+                            <span class="text-xs font-bold text-slate-500 bg-slate-100 border border-slate-200 px-3 py-1 rounded-full truncate shrink-0 max-w-[100px] sm:max-w-[150px]">${exam.subject || 'عام'}</span>
+                            ${statusHtml}
+                        </div>
+                        <h4 class="text-xl md:text-2xl font-heading font-black text-slate-900 mb-3 group-hover:text-brand-600 transition-colors line-clamp-2" title="${exam.title}">${exam.title}</h4>
+                        <p class="text-slate-500 text-sm mb-6 flex-grow leading-relaxed font-medium line-clamp-2">امتحان إلكتروني شامل مجهز لتقييم مستواك في هذه المادة.</p>
+                        <div class="flex items-center justify-between py-4 border-t border-slate-100 text-sm text-slate-600 font-bold mb-4 w-full">
+                            <span class="flex items-center gap-2 shrink-0"><div class="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-400"><i class="fa-regular fa-clock"></i></div> ${exam.duration} د</span>
+                            <span class="flex items-center gap-2 shrink-0"><div class="w-8 h-8 rounded-full bg-slate-50 flex items-center justify-center text-slate-400"><i class="fa-solid fa-list-ul"></i></div> ${exam.questions?.length || 0} أسئلة</span>
+                        </div>
+                        <button ${!isAvailable ? 'disabled' : `onclick="window.openExamLogin('${exam.id}')"`} class="w-full ${btnClass} font-bold py-3.5 px-4 rounded-xl transition-all duration-300 text-base shadow-sm">${btnText}</button>
+                    </div>
+                `;
+                grid.insertAdjacentHTML('beforeend', cardHtml);
+            });
+
+            if (visibleExams.length > 3) {
+                if(viewMoreContainer) viewMoreContainer.classList.remove('hidden');
+            } else {
+                if(viewMoreContainer) viewMoreContainer.classList.add('hidden');
+            }
+        };
+
+        window.openExamLogin = (examId) => {
+            selectedExam = window.availableExams.find(e => e.id === examId);
+            if (!selectedExam) return;
+            
+            // تحقق صارم بناءً على الحالة اليدوية فقط (تم إلغاء تأثير الوقت)
+            if (selectedExam.status === 'closed') { 
+                window.showModal('عذراً', 'تم إغلاق هذا الامتحان من قبل الإدارة.', 'error');
+                return; 
+            }
+            if (selectedExam.status === 'upcoming') { 
+                window.showModal('عذراً', 'هذا الامتحان لم يبدأ بعد (قريباً).', 'warning');
+                return; 
+            }
+
+            document.getElementById('login-exam-title').innerText = selectedExam.title;
+            document.getElementById('login-exam-subject').innerText = selectedExam.subject || 'مادة عامة';
+            document.getElementById('login-exam-duration').innerText = selectedExam.duration;
+
+            const fieldsContainer = document.getElementById('dynamic-login-fields');
+            fieldsContainer.innerHTML = '';
+            
+            if(selectedExam.loginFields && selectedExam.loginFields.length > 0) {
+                selectedExam.loginFields.forEach((field) => {
+                    fieldsContainer.innerHTML += `
+                        <div class="w-full">
+                            <label class="block text-slate-500 text-sm font-bold mb-2 ml-1">${field.label} <span class="text-rose-500">*</span></label>
+                            <input class="w-full px-5 py-4 bg-slate-50/50 border border-slate-200 rounded-xl text-slate-900 font-bold focus:outline-none focus:border-brand-500 focus:bg-white focus:ring-4 focus:ring-brand-500/10 transition-all student-field-input min-w-0" data-label="${field.label}" type="text" placeholder="اكتب ${field.label} هنا">
+                        </div>
+                    `;
+                });
+            } else {
+                 fieldsContainer.innerHTML = `
+                    <div class="w-full">
+                        <label class="block text-slate-500 text-sm font-bold mb-2 ml-1">اسم الطالب رباعي <span class="text-rose-500">*</span></label>
+                        <input class="w-full px-5 py-4 bg-slate-50/50 border border-slate-200 rounded-xl text-slate-900 font-bold focus:outline-none focus:border-brand-500 focus:bg-white focus:ring-4 focus:ring-brand-500/10 transition-all student-field-input min-w-0" data-label="الاسم" type="text" placeholder="الاسم الكامل">
+                    </div>`;
+            }
+
+            window.switchView('login');
+        };
+
+        // بناء معرّف فريد ثابت لكل طالب من بيانات تسجيله (يُستخدم كمفتاح localStorage
+        // ومعرّف مستند التسليم، لمنع تلوث بيانات الطلاب على الأجهزة المشتركة ومنع التكرار).
+        window.buildStudentUniqueKey = (data) => {
+            const raw = Object.values(data).join('|').trim().toLowerCase();
+            // sanitize بسيط يصلح لاستخدامه داخل مفتاح Firestore doc ID
+            return raw.replace(/[\/\.\#\$\[\]\s]+/g, '_').slice(0, 120) || 'unknown';
+        };
+
+        window.startExamProcess = async () => {
+            const inputs = document.querySelectorAll('.student-field-input');
+            currentStudentData = {};
+            let allFilled = true;
+
+            inputs.forEach(input => {
+                if(!input.value.trim()) allFilled = false;
+                currentStudentData[input.dataset.label] = input.value.trim();
+            });
+
+            if (!allFilled) {
+                window.showModal('بيانات ناقصة', 'يرجى إدخال جميع البيانات المطلوبة لبدء الاختبار.', 'warning');
+                return;
+            }
+
+            const startBtn = document.querySelector('#login-view button[onclick="window.startExamProcess()"]');
+            if (startBtn) { startBtn.disabled = true; startBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري التحقق...'; }
+
+            currentStudentKey = window.buildStudentUniqueKey(currentStudentData);
+            window.currentSubmissionId = `${selectedExam.id}_${currentStudentKey}`;
+
+            // تحقق: هل هذا الطالب سلّم هذا الامتحان من قبل؟ (منع التكرار)
+            try {
+                const existing = await window.getDoc(window.doc(window.db, "submissions", window.currentSubmissionId));
+                if (existing.exists()) {
+                    window.showModal('تم التسليم مسبقاً', 'يوجد تسليم مسجّل بالفعل بهذه البيانات لهذا الامتحان. إذا كنت تعتقد أن هذا خطأ، تواصل مع المشرف.', 'error');
+                    if (startBtn) { startBtn.disabled = false; startBtn.innerHTML = 'دخول الامتحان <i class="fa-solid fa-arrow-left"></i>'; }
+                    return;
+                }
+            } catch (e) {
+                console.warn("Duplicate-check failed (continuing):", e);
+            }
+
+            await window.syncServerTime();
+
+            const firstKey = Object.keys(currentStudentData)[0];
+            document.getElementById('display-student-name').innerText = currentStudentData[firstKey] || 'طالب';
+            
+            document.getElementById('total-questions-num').innerText = selectedExam.questions.length;
+            window.switchView('exam');
+            window.initLocalSession();
+            window.renderQuestion();
+
+            if (startBtn) { startBtn.disabled = false; startBtn.innerHTML = 'دخول الامتحان <i class="fa-solid fa-arrow-left"></i>'; }
+        };
+
+        window.getStorageKey = () => { return `alzain_exam_${selectedExam.id}_${currentStudentKey}`; };
+
+        window.initLocalSession = () => {
+            const savedData = localStorage.getItem(window.getStorageKey());
+            const now = window.trustedNow();
+            if (savedData) {
+                const parsedData = JSON.parse(savedData);
+                studentAnswers = parsedData.answers || {};
+                examEndTime = parsedData.endTime;
+                if (now > examEndTime) { window.submitExamToFirebase(true); return; }
+            } else {
+                examEndTime = now + (selectedExam.duration * 60 * 1000);
+                studentAnswers = {};
+                window.saveProgressLocally();
+            }
+            currentQuestionIndex = 0; 
+            window.startTimer();
+        };
+
+        window.saveProgressLocally = () => {
+            localStorage.setItem(window.getStorageKey(), JSON.stringify({
+                examId: selectedExam.id, answers: studentAnswers, endTime: examEndTime
+            }));
+            let answeredCount = 0;
+            Object.values(studentAnswers).forEach(val => { if(val && val.toString().trim() !== '') answeredCount++; });
+            document.getElementById('answered-count').innerText = answeredCount;
+        };
+
+        window.handleAnswerSelection = (qIndex, selectedValue) => {
+            studentAnswers[qIndex] = selectedValue;
+            window.saveProgressLocally();
+        };
+
+        window.renderQuestion = () => {
+            const q = selectedExam.questions[currentQuestionIndex];
+            document.getElementById('current-question-num').innerText = currentQuestionIndex + 1;
+            document.getElementById('question-text').innerText = q.text;
+            
+            const badge = document.getElementById('question-type-badge');
+            badge.innerText = q.type === 'mcq' ? 'سؤال اختياري' : 'سؤال مقالي';
+
+            const progressPercent = ((currentQuestionIndex + 1) / selectedExam.questions.length) * 100;
+            document.getElementById('progress-bar').style.width = `${progressPercent}%`;
+
+            const optionsContainer = document.getElementById('options-container');
+            optionsContainer.innerHTML = ''; 
+
+            if (q.type === 'mcq') {
+                q.options.forEach((option, idx) => {
+                    const isChecked = studentAnswers[currentQuestionIndex] === option ? "checked" : "";
+                    
+                    const optionHTML = `
+                        <div class="relative w-full group">
+                            <input type="radio" name="q-${currentQuestionIndex}" id="opt-${idx}" value="${option}" class="peer sr-only" onchange="window.handleAnswerSelection(${currentQuestionIndex}, '${option}')" ${isChecked}>
+                            <label for="opt-${idx}" class="flex items-center p-4 md:p-6 cursor-pointer rounded-2xl w-full transition-all duration-300 border-2 border-slate-100 bg-white hover:border-slate-300 hover:bg-slate-50 peer-checked:border-brand-600 peer-checked:bg-brand-50/50 peer-checked:shadow-[0_8px_20px_-6px_rgba(49,70,179,0.15)] break-words">
+                                <div class="w-6 h-6 shrink-0 md:w-7 md:h-7 rounded-full border-2 border-slate-300 mr-2 md:mr-4 ml-3 flex items-center justify-center transition-all duration-300 peer-checked:border-brand-600 peer-checked:bg-brand-600">
+                                    <i class="fa-solid fa-check text-white opacity-0 scale-50 transition-all duration-300 peer-checked:opacity-100 peer-checked:scale-100 text-[10px]"></i>
+                                </div>
+                                <span class="text-slate-700 font-bold text-base md:text-xl transition-colors duration-300 peer-checked:text-brand-900 whitespace-pre-wrap break-words flex-grow">${option}</span>
+                            </label>
+                        </div>
+                    `;
+                    optionsContainer.insertAdjacentHTML('beforeend', optionHTML);
+                });
+            } else {
+                const textVal = studentAnswers[currentQuestionIndex] || "";
+                optionsContainer.innerHTML = `<textarea class="w-full h-40 bg-slate-50 border border-slate-200 rounded-2xl p-5 text-slate-800 font-bold focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 transition-all resize-none min-w-0" placeholder="اكتب إجابتك هنا بوضوح..." oninput="window.handleAnswerSelection(${currentQuestionIndex}, this.value)">${textVal}</textarea>`;
+            }
+
+            document.getElementById('prev-btn').disabled = currentQuestionIndex === 0;
+            if (currentQuestionIndex === selectedExam.questions.length - 1) {
+                document.getElementById('next-btn').classList.add('hidden');
+                document.getElementById('submit-btn').classList.remove('hidden');
+            } else {
+                document.getElementById('next-btn').classList.remove('hidden');
+                document.getElementById('submit-btn').classList.add('hidden');
+            }
+        };
+
+        window.nextQuestion = () => { if (currentQuestionIndex < selectedExam.questions.length - 1) { currentQuestionIndex++; window.renderQuestion(); } };
+        window.prevQuestion = () => { if (currentQuestionIndex > 0) { currentQuestionIndex--; window.renderQuestion(); } };
+
+        window.startTimer = () => {
+            clearInterval(timerInterval);
+            const container = document.getElementById('timer-container');
+            const display = document.getElementById('timer-display');
+            const icon = document.getElementById('timer-icon');
+            
+            function updateDisplay() {
+                const now = window.trustedNow();
+                const distance = examEndTime - now;
+
+                if (distance <= 0) {
+                    clearInterval(timerInterval);
+                    display.innerText = "00:00";
+                    window.submitExamToFirebase(true); 
+                    return;
+                }
+
+                const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                const seconds = Math.floor((distance % (1000 * 60)) / 1000);
+                display.innerText = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                
+                if (distance < 120000) {
+                    container.classList.replace('bg-slate-50', 'bg-red-50');
+                    container.classList.replace('border-slate-100', 'border-red-100');
+                    container.classList.replace('text-slate-700', 'text-red-600');
+                    icon.classList.replace('text-slate-400', 'text-red-500');
+                }
+            }
+            updateDisplay();
+            timerInterval = setInterval(updateDisplay, 1000);
+        };
+
+        window.confirmSubmit = () => {
+            let answeredCount = 0;
+            Object.values(studentAnswers).forEach(val => { if(val && val.toString().trim() !== '') answeredCount++; });
+            const total = selectedExam.questions.length;
+            
+            if(answeredCount < total) {
+                window.showModal(
+                    'تأكيد التسليم',
+                    `لم تقم بالإجابة على جميع الأسئلة (${answeredCount} من ${total}). هل أنت متأكد من التسليم النهائي؟`,
+                    'confirm',
+                    () => { window.submitExamToFirebase(false); }
+                );
+            } else {
+                window.showModal(
+                    'تأكيد التسليم',
+                    'هل أنت متأكد من تسليم الإجابات وإنهاء الاختبار؟',
+                    'confirm',
+                    () => { window.submitExamToFirebase(false); }
+                );
+            }
+        };
+
+        window.submitExamToFirebase = async (isAutoSubmit = false) => {
+            clearInterval(timerInterval);
+            const btn = document.getElementById('submit-btn');
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإرسال...';
+            btn.disabled = true;
+
+            const submissionData = {
+                examId: selectedExam.id,
+                studentData: currentStudentData,
+                rawAnswers: studentAnswers,
+                status: 'submitted',
+                submittedAt: Date.now(),
+                submittedAtServer: window.serverTimestamp()
+            };
+
+            const submissionId = window.currentSubmissionId || `${selectedExam.id}_${currentStudentKey}`;
+
+            try {
+                // setDoc على معرف ثابت (examId_studentKey): محاولة تسليم ثانية بنفس
+                // الهوية تُصنَّف "update" وترفضها Firestore Rules تلقائيًا (لا تكرار ممكن).
+                await window.setDoc(window.doc(window.db, "submissions", submissionId), submissionData);
+
+                if (isAutoSubmit) {
+                    window.showModal('انتهى الوقت', 'انتهى وقت الاختبار. تم حفظ وتسليم إجاباتك تلقائياً.', 'info');
+                }
+
+                const firstKey = Object.keys(currentStudentData)[0];
+                document.getElementById('end-student-name').innerText = currentStudentData[firstKey] || 'طالب';
+                document.getElementById('submission-id-display').innerText = submissionId.slice(-10).toUpperCase();
+
+                // لا يتم حساب أو عرض الدرجة هنا إطلاقًا: الإجابات الصحيحة غير موجودة
+                // في متصفح الطالب لأي سبب أمني. الدرجة تُحتسب من لوحة تحكم الأدمن فقط.
+                document.getElementById('score-display-container')?.classList.add('hidden');
+
+                window.switchView('end');
+                localStorage.removeItem(window.getStorageKey());
+                
+            } catch (error) {
+                console.error("Error submitting:", error);
+                if (error?.code === 'permission-denied') {
+                    window.showModal('تم التسليم مسبقاً', 'إجاباتك مسجّلة بالفعل لدى النظام. إن كنت تظن أن هذا خطأ تواصل مع المشرف.', 'info');
+                    localStorage.removeItem(window.getStorageKey());
+                    return;
+                }
+                window.showModal('خطأ في الإرسال', 'حدث خطأ أثناء الإرسال. سيتم إعادة المحاولة تلقائيًا، يرجى عدم إغلاق الصفحة.', 'error');
+                btn.innerHTML = 'إنهاء وتسليم <i class="fa-solid fa-check"></i>';
+                btn.disabled = false;
+                window.startTimer();
+            }
+        };
+
+        document.querySelectorAll('a[href]').forEach(link => {
+            link.addEventListener('click', function(e) {
+                const href = this.getAttribute('href');
+                if (href && href !== '#' && !href.startsWith('javascript')) {
+                    if (!views.exam.classList.contains('hidden')) {
+                        e.preventDefault();
+                        window.handleExitRequest(() => {
+                            window.location.href = href;
+                        });
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>
+
+
