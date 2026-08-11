@@ -15,7 +15,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
         import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-        import { getFirestore, collection, getDocs, setDoc, doc, getDoc, serverTimestamp, query, where } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+        import { getFirestore, collection, getDocs, setDoc, addDoc, doc, getDoc, serverTimestamp, query, where } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyBd_Q5f62VsOsmD9wjSpV8mGJpefoXYihE",
@@ -35,6 +35,7 @@
         window.collection = collection;
         window.getDocs = getDocs;
         window.setDoc = setDoc;
+        window.addDoc = addDoc;
         window.doc = doc;
         window.getDoc = getDoc;
         window.serverTimestamp = serverTimestamp;
@@ -959,11 +960,6 @@
             if (startBtn) { startBtn.disabled = true; startBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري التحقق...'; }
 
             currentStudentKey = window.buildStudentUniqueKey(currentStudentData);
-            window.currentSubmissionId = `${selectedExam.id}_${currentStudentKey}`;
-
-            // ملاحظة: تم إلغاء فحص "هل سلّمت من قبل؟" هنا لأنه يحتاج صلاحية قراءة
-            // من submissions وهي محصورة بالأدمن فقط. الحماية من التكرار تتم فعليًا
-            // في submitExamToFirebase عبر معرف مستند ثابت (create/update rule).
 
             await window.syncServerTime();
 
@@ -1129,7 +1125,9 @@
                 submittedAtServer: window.serverTimestamp()
             };
 
-            const submissionId = window.currentSubmissionId || `${selectedExam.id}_${currentStudentKey}`;
+            // ملاحظة: كل تسليم يأخذ معرّفًا عشوائيًا جديدًا (وليس معرّفًا ثابتًا مبنيًا
+            // على هوية الطالب) — أي طالب يمكنه الدخول والتسليم أكثر من مرة بلا قيود،
+            // وستظهر كل محاولة كسجل منفصل في لوحة تحكم الأدمن.
 
             // مهلة قصوى 20 ثانية: التسليم لا يظل "معلّقًا" إلى الأبد أبدًا،
             // حتى لو حدث خلل غير متوقع في الاتصال بالسيرفر.
@@ -1139,12 +1137,11 @@
             ]);
 
             try {
-                // setDoc على معرف ثابت (examId_studentKey): محاولة تسليم ثانية بنفس
-                // الهوية تُصنَّف "update" وترفضها Firestore Rules تلقائيًا (لا تكرار ممكن).
-                await withTimeout(
-                    window.setDoc(window.doc(window.db, "submissions", submissionId), submissionData),
+                const submissionRef = await withTimeout(
+                    window.addDoc(window.collection(window.db, "submissions"), submissionData),
                     20000
                 );
+                const submissionId = submissionRef.id;
 
                 if (isAutoSubmit) {
                     window.showModal('انتهى الوقت', 'انتهى وقت الاختبار. تم حفظ وتسليم إجاباتك تلقائياً.', 'info');
@@ -1162,19 +1159,17 @@
                 localStorage.removeItem(window.getStorageKey());
                 
             } catch (error) {
-                console.error("Error submitting submission:", submissionId, "| code:", error?.code, "| message:", error?.message, error);
+                console.error("Error submitting submission | code:", error?.code, "| message:", error?.message, error);
 
                 if (error?.code === 'permission-denied') {
-                    // رفض دائم من السيرفر (تسليم مكرر بنفس الهوية، أو Rules غير صحيحة).
-                    // لا فائدة من إعادة المحاولة تلقائيًا هنا، فنوقف الحلقة ونعرض رسالة واضحة مرة واحدة.
                     window.showModal(
                         'تعذّر التسليم',
-                        'تم رفض العملية من السيرفر. الأسباب المحتملة: (١) إجاباتك مسجّلة بالفعل بهذه البيانات لهذا الامتحان. (٢) خلل في صلاحيات النظام — أبلغ المشرف فورًا واذكر له: permission-denied.',
+                        'تم رفض العملية من السيرفر. أبلغ المشرف فورًا واذكر له: permission-denied.',
                         'error'
                     );
                     btn.innerHTML = 'إنهاء وتسليم <i class="fa-solid fa-check"></i>';
                     btn.disabled = false;
-                    return; // لا نعيد تشغيل التايمر لتفادي تكرار الرسالة كل ثانية
+                    return;
                 }
 
                 if (error?.code === 'client-timeout') {
