@@ -189,6 +189,19 @@
             50% { transform: translateY(-12px); }
         }
         .animate-float { animation: float 5s ease-in-out infinite; }
+
+        /* منع تحديد النص/النسخ أثناء الامتحان فقط (لا يمنع لصق الإجابات في الحقول النصية نفسها) */
+        #exam-view.no-copy-zone {
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            user-select: none;
+        }
+        #exam-view.no-copy-zone textarea,
+        #exam-view.no-copy-zone input {
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            user-select: text; /* الطالب لازم يقدر يكتب/يحدد جوه حقل إجابته هو نفسه */
+        }
     </style>
 </head>
 <body class="flex flex-col min-h-screen text-slate-800 font-sans relative">
@@ -762,6 +775,8 @@
         let currentQuestionIndex = 0;
         let studentAnswers = {};
         let currentStudentKey = '';
+        let suspiciousEvents = [];
+        window.examActive = false;
         let timerInterval;
         let examEndTime;
 
@@ -798,6 +813,7 @@
                     'confirm',
                     () => {
                         clearInterval(timerInterval);
+                        window.exitExamSecureMode();
                         localStorage.removeItem(window.getStorageKey());
                         targetAction();
                     }
@@ -1008,6 +1024,7 @@
             if (savedData) {
                 const parsedData = JSON.parse(savedData);
                 studentAnswers = parsedData.answers || {};
+                suspiciousEvents = parsedData.suspiciousEvents || [];
                 examEndTime = parsedData.endTime;
                 if (now > examEndTime) { window.submitExamToFirebase(true); return; }
             } else {
@@ -1015,19 +1032,112 @@
                 // وإلا نرجع للسلوك القديم (ساعة كاملة من لحظة دخول هذا الطالب تحديدًا).
                 examEndTime = window.scheduledExamDeadline || (now + (selectedExam.duration * 60 * 1000));
                 studentAnswers = {};
+                suspiciousEvents = [];
                 window.saveProgressLocally();
             }
+            window.enterExamSecureMode();
             currentQuestionIndex = 0; 
             window.startTimer();
         };
 
         window.saveProgressLocally = () => {
             localStorage.setItem(window.getStorageKey(), JSON.stringify({
-                examId: selectedExam.id, answers: studentAnswers, endTime: examEndTime
+                examId: selectedExam.id, answers: studentAnswers, endTime: examEndTime, suspiciousEvents: suspiciousEvents
             }));
             let answeredCount = 0;
             Object.values(studentAnswers).forEach(val => { if(val && val.toString().trim() !== '') answeredCount++; });
             document.getElementById('answered-count').innerText = answeredCount;
+        };
+
+        // ==================== رصد محاولات الغش (Anti-Cheat, أفضل مجهود ممكن) ====================
+        // ⚠️ هذا لا يمنع الغش بشكل مطلق (لا يوجد حل ويب يمنع تصوير الشاشة بجهاز آخر مثلاً)،
+        // لكنه يرصد أوضح المحاولات الشائعة (نسخ الأسئلة، فتح أدوات المطور، الخروج من التبويب،
+        // الخروج من وضع ملء الشاشة) ويسجلها مع التسليم النهائي ليراها المشرف في الداشبورد.
+        window.logSuspiciousEvent = (type) => {
+            const last = suspiciousEvents[suspiciousEvents.length - 1];
+            const now = window.trustedNow ? window.trustedNow() : Date.now();
+            // تجميع/تقليل الضوضاء: لا نسجل نفس النوع مرتين خلال أقل من 3 ثوانٍ
+            if (last && last.type === type && (now - last.at) < 3000) return;
+            if (suspiciousEvents.length >= 200) return; // سقف أمان بسيط
+            suspiciousEvents.push({ type, at: now });
+            window.saveProgressLocally();
+        };
+
+        window.setupAntiCheatListeners = () => {
+            if (window.antiCheatAttached) return;
+            window.antiCheatAttached = true;
+
+            const examEl = () => document.getElementById('exam-view');
+
+            document.addEventListener('contextmenu', (e) => {
+                if (window.examActive) e.preventDefault();
+            });
+
+            ['copy', 'cut'].forEach(evt => {
+                document.addEventListener(evt, (e) => {
+                    if (!window.examActive) return;
+                    const tag = (e.target.tagName || '').toLowerCase();
+                    // نسمح بالنسخ/القص جوه حقول إجابة الطالب نفسه (مراجعة إجابته هو)
+                    if (tag === 'textarea' || tag === 'input') return;
+                    e.preventDefault();
+                    window.logSuspiciousEvent(evt === 'copy' ? 'copy_attempt' : 'cut_attempt');
+                });
+            });
+
+            document.addEventListener('paste', (e) => {
+                if (!window.examActive) return;
+                e.preventDefault();
+                window.logSuspiciousEvent('paste_attempt');
+            });
+
+            document.addEventListener('keydown', (e) => {
+                if (!window.examActive) return;
+                const key = (e.key || '').toLowerCase();
+                const blockedCombo =
+                    key === 'f12' ||
+                    ((e.ctrlKey || e.metaKey) && e.shiftKey && ['i', 'j', 'c'].includes(key)) ||
+                    ((e.ctrlKey || e.metaKey) && key === 'u') ||
+                    ((e.ctrlKey || e.metaKey) && key === 's');
+                if (blockedCombo) {
+                    e.preventDefault();
+                    window.logSuspiciousEvent('devtools_or_save_shortcut');
+                }
+            });
+
+            document.addEventListener('visibilitychange', () => {
+                if (window.examActive && document.hidden) {
+                    window.logSuspiciousEvent('left_tab_or_app');
+                }
+            });
+
+            window.addEventListener('blur', () => {
+                if (window.examActive) window.logSuspiciousEvent('window_blur');
+            });
+
+            document.addEventListener('fullscreenchange', () => {
+                if (window.examActive && !document.fullscreenElement) {
+                    window.logSuspiciousEvent('fullscreen_exit');
+                }
+            });
+        };
+
+        window.enterExamSecureMode = () => {
+            window.examActive = true;
+            document.getElementById('exam-view')?.classList.add('no-copy-zone');
+            window.setupAntiCheatListeners();
+            // ملء الشاشة اختياري وأفضل مجهود فقط؛ بعض المتصفحات (خصوصًا آيفون Safari) لا تدعمه إطلاقًا
+            const el = document.documentElement;
+            if (el.requestFullscreen) {
+                el.requestFullscreen().catch(() => { /* تجاهل: الجهاز لا يدعم أو رفض المستخدم */ });
+            }
+        };
+
+        window.exitExamSecureMode = () => {
+            window.examActive = false;
+            document.getElementById('exam-view')?.classList.remove('no-copy-zone');
+            if (document.fullscreenElement && document.exitFullscreen) {
+                document.exitFullscreen().catch(() => {});
+            }
         };
 
         window.handleAnswerSelection = (qIndex, selectedValue) => {
@@ -1150,7 +1260,8 @@
                 rawAnswers: studentAnswers,
                 status: 'submitted',
                 submittedAt: Date.now(),
-                submittedAtServer: window.serverTimestamp()
+                submittedAtServer: window.serverTimestamp(),
+                suspiciousEvents: suspiciousEvents
             };
 
             // ملاحظة: كل تسليم يأخذ معرّفًا عشوائيًا جديدًا (وليس معرّفًا ثابتًا مبنيًا
@@ -1183,6 +1294,7 @@
                 // في متصفح الطالب لأي سبب أمني. الدرجة تُحتسب من لوحة تحكم الأدمن فقط.
                 document.getElementById('score-display-container')?.classList.add('hidden');
 
+                window.exitExamSecureMode();
                 window.switchView('end');
                 localStorage.removeItem(window.getStorageKey());
                 
