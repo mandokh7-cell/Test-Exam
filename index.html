@@ -1125,18 +1125,31 @@
             window.examActive = true;
             document.getElementById('exam-view')?.classList.add('no-copy-zone');
             window.setupAntiCheatListeners();
-            // ملء الشاشة اختياري وأفضل مجهود فقط؛ بعض المتصفحات (خصوصًا آيفون Safari) لا تدعمه إطلاقًا
-            const el = document.documentElement;
-            if (el.requestFullscreen) {
-                el.requestFullscreen().catch(() => { /* تجاهل: الجهاز لا يدعم أو رفض المستخدم */ });
+            // ملء الشاشة اختياري وأفضل مجهود فقط، ومحاط بحماية كاملة: أي فشل هنا (شائع
+            // جدًا على الموبايل: iOS Safari لا يدعمه، وبعض متصفحات أندرويد ترفضه أحيانًا)
+            // يجب ألا يوقف أو يعطّل أي جزء آخر من الامتحان أو التسليم.
+            try {
+                const el = document.documentElement;
+                if (el.requestFullscreen) {
+                    el.requestFullscreen().catch(() => { /* تجاهل: الجهاز لا يدعم أو رفض المستخدم */ });
+                }
+            } catch (e) {
+                console.warn('requestFullscreen failed (non-blocking):', e);
             }
         };
 
         window.exitExamSecureMode = () => {
-            window.examActive = false;
-            document.getElementById('exam-view')?.classList.remove('no-copy-zone');
-            if (document.fullscreenElement && document.exitFullscreen) {
-                document.exitFullscreen().catch(() => {});
+            // ⚠️ دفاعي بالكامل: هذه الدالة تُستدعى أثناء عملية التسليم نفسها، لذا أي خطأ
+            // بداخلها (خصوصًا exitFullscreen على الموبايل عند التسليم التلقائي بدون لمسة
+            // مستخدم مباشرة) يجب ألا يوقف أو يفشل عملية التسليم التي نجحت فعليًا على السيرفر.
+            try {
+                window.examActive = false;
+                document.getElementById('exam-view')?.classList.remove('no-copy-zone');
+                if (document.fullscreenElement && document.exitFullscreen) {
+                    document.exitFullscreen().catch(() => {});
+                }
+            } catch (e) {
+                console.warn('exitExamSecureMode failed (non-blocking, submission unaffected):', e);
             }
         };
 
