@@ -666,44 +666,22 @@
                     }
                 }
 
-                // ==================== علامة الاشتباه (Anti-Cheat flags) ====================
-                const suspicious = sub.suspiciousEvents || [];
-                let suspiciousHtml = '';
-                if (suspicious.length > 0) {
-                    const typeLabels = {
-                        copy_attempt: 'محاولة نسخ',
-                        cut_attempt: 'محاولة قص',
-                        paste_attempt: 'محاولة لصق',
-                        devtools_or_save_shortcut: 'محاولة فتح أدوات المطوّر/حفظ الصفحة',
-                        left_tab_or_app: 'خروج من التبويب/التطبيق',
-                        window_blur: 'خروج من نافذة المتصفح',
-                        fullscreen_exit: 'خروج من وضع ملء الشاشة'
-                    };
-                    const counts = {};
-                    suspicious.forEach(ev => { counts[ev.type] = (counts[ev.type] || 0) + 1; });
-                    const breakdown = Object.entries(counts)
-                        .map(([type, count]) => `${typeLabels[type] || type} (${count})`)
-                        .join('، ');
-                    suspiciousHtml = `
-                        <div class="mt-2 w-full bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 text-xs sm:text-sm font-bold flex items-start gap-2">
-                            <i class="fa-solid fa-triangle-exclamation mt-0.5 shrink-0"></i>
-                            <span>اشتباه (${suspicious.length}): ${breakdown}</span>
-                        </div>
-                    `;
-                }
-
                 const subCard = `
-                    <div class="bg-white rounded-2xl shadow-sm border ${suspicious.length > 0 ? 'border-amber-300' : 'border-slate-200'} p-4 sm:p-6 print:border-b-4 print:border-black print:mb-10 print:shadow-none print:break-inside-avoid w-full overflow-hidden">
+                    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 print:border-b-4 print:border-black print:mb-10 print:shadow-none print:break-inside-avoid w-full overflow-hidden">
                         <div class="flex justify-between items-start mb-4 pb-4 border-b border-slate-100 gap-3 w-full">
                             <div class="overflow-hidden w-full flex-1">
                                 <h4 class="text-base sm:text-lg font-heading font-black text-brand-700 mb-2">ورقة إجابة #${subIndex + 1}</h4>
                                 <div class="flex flex-col gap-1 w-full">
                                     ${studentDataHtml}
                                     <div class="text-xs sm:text-sm w-full mt-1 text-slate-500 truncate">التسليم: <span class="font-bold text-slate-700" dir="ltr">${sub.submittedAt ? new Date(sub.submittedAt).toLocaleString('en-GB') : 'غير مسجل'}</span></div>
-                                    ${suspiciousHtml}
                                 </div>
                             </div>
-                            ${scoreHtml}
+                            <div class="flex items-start gap-2 shrink-0">
+                                ${scoreHtml}
+                                <button onclick="window.deleteSubmission('${sub.id}')" class="no-print w-9 h-9 sm:w-10 sm:h-10 bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition rounded-xl flex items-center justify-center shrink-0" title="حذف ورقة الإجابة دي">
+                                    <i class="fa-solid fa-trash-can text-sm"></i>
+                                </button>
+                            </div>
                         </div>
                         <div class="mt-4 w-full">
                             ${questionsHtml}
@@ -713,6 +691,17 @@
                 container.insertAdjacentHTML('beforeend', subCard);
             });
         }
+
+        window.deleteSubmission = async (subId) => {
+            if (!confirm('هل أنت متأكد من حذف ورقة الإجابة دي؟ الإجراء ده نهائي ومش هترجع تاني.')) return;
+            try {
+                await deleteDoc(doc(getSubmissionsRef(), subId));
+                // الـ onSnapshot على submissions هيحدّث الصفحة تلقائيًا بمجرد الحذف
+            } catch (error) {
+                console.error("Error deleting submission:", error);
+                alert('حدث خطأ أثناء الحذف. تأكد من صلاحياتك كأدمن.');
+            }
+        };
 
         window.printReports = () => window.print();
 
@@ -1022,5 +1011,4 @@
         </main>
     </div>
 </body>
-</html>
-
+                    </html>
