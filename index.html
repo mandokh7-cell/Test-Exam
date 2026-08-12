@@ -48,7 +48,8 @@
         window.serverTimeOffsetMs = 0;
         window.syncServerTime = async () => {
             try {
-                const uid = auth.currentUser?.uid;
+                const user = await window.ensureAuthenticated();
+                const uid = user?.uid;
                 if (!uid) return 0;
                 const ref = doc(db, "time_pings", uid);
                 const beforeLocal = Date.now();
@@ -107,6 +108,14 @@
                 console.error("Error Loading Data:", error);
                 if(grid) grid.innerHTML = '<div class="col-span-full text-center py-10 text-rose-600 font-bold">حدث خطأ في تحميل البيانات. يرجى التأكد من اتصالك بالإنترنت وتحديث الصفحة.</div>';
             }
+        };
+
+        window.ensureAuthenticated = async () => {
+            if (window.auth.currentUser) return window.auth.currentUser;
+            // الجلسة انقطعت (شائع على الموبايل بعد قفل الشاشة أو ضغط الذاكرة) — نعيد
+            // تسجيل الدخول المجهول تلقائيًا قبل أي محاولة كتابة على Firestore.
+            const result = await signInAnonymously(window.auth);
+            return result.user;
         };
 
         window.onload = async () => {
@@ -1289,6 +1298,7 @@
             ]);
 
             try {
+                await window.ensureAuthenticated();
                 const submissionRef = await withTimeout(
                     window.addDoc(window.collection(window.db, "submissions"), submissionData),
                     20000
