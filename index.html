@@ -963,6 +963,32 @@
 
             await window.syncServerTime();
 
+            // ==================== موعد الامتحان الموحّد لكل الطلاب ====================
+            // إن حدد الأدمن وقت بداية للامتحان، الموعد النهائي يُحسب من هذا الوقت المطلق
+            // (Epoch ms، غير متأثر بالتوقيت الصيفي/الشتوي) وليس من لحظة دخول كل طالب.
+            // معنى ذلك: طالب دخل متأخرًا 5 دقائق عن الموعد، يخصم من وقته 5 دقائق فعليًا.
+            window.scheduledExamDeadline = null;
+            if (selectedExam.startTimeMs) {
+                const now = window.trustedNow();
+                const startPlusDuration = selectedExam.startTimeMs + (selectedExam.duration * 60 * 1000);
+                const deadline = selectedExam.endTimeMs
+                    ? Math.min(startPlusDuration, selectedExam.endTimeMs)
+                    : startPlusDuration;
+
+                if (now < selectedExam.startTimeMs) {
+                    const startsAt = new Date(selectedExam.startTimeMs).toLocaleString('ar-EG', { hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'numeric' });
+                    window.showModal('لم يبدأ الامتحان بعد', `موعد بداية هذا الامتحان هو ${startsAt}. يرجى المحاولة في الموعد المحدد.`, 'warning');
+                    if (startBtn) { startBtn.disabled = false; startBtn.innerHTML = 'دخول الامتحان <i class="fa-solid fa-arrow-left"></i>'; }
+                    return;
+                }
+                if (now >= deadline) {
+                    window.showModal('انتهى وقت الامتحان', 'انتهى الوقت المخصص لهذا الامتحان ولا يمكن الدخول إليه الآن. تواصل مع المشرف إن كنت تظن أن هذا خطأ.', 'error');
+                    if (startBtn) { startBtn.disabled = false; startBtn.innerHTML = 'دخول الامتحان <i class="fa-solid fa-arrow-left"></i>'; }
+                    return;
+                }
+                window.scheduledExamDeadline = deadline;
+            }
+
             const firstKey = Object.keys(currentStudentData)[0];
             document.getElementById('display-student-name').innerText = currentStudentData[firstKey] || 'طالب';
             
@@ -985,7 +1011,9 @@
                 examEndTime = parsedData.endTime;
                 if (now > examEndTime) { window.submitExamToFirebase(true); return; }
             } else {
-                examEndTime = now + (selectedExam.duration * 60 * 1000);
+                // موعد نهاية موحّد لكل الطلاب إن كان الأدمن قد حدد وقت بداية للامتحان،
+                // وإلا نرجع للسلوك القديم (ساعة كاملة من لحظة دخول هذا الطالب تحديدًا).
+                examEndTime = window.scheduledExamDeadline || (now + (selectedExam.duration * 60 * 1000));
                 studentAnswers = {};
                 window.saveProgressLocally();
             }
