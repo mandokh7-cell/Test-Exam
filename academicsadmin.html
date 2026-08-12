@@ -473,6 +473,11 @@
             draft.showScoreToStudent = document.getElementById('exam-show-score').checked;
             draft.startTime = document.getElementById('exam-start').value;
             draft.endTime = document.getElementById('exam-end').value;
+            // ⚠️ إصلاح مشكلة التوقيت الصيفي/الشتوي: نحوّل الوقت لرقم مطلق (Epoch ms)
+            // مرة واحدة هنا وقت الحفظ، بدل ما كل جهاز طالب يعيد تفسير النص وقت الدخول.
+            // هذا الرقم لا يتأثر بتغيّر التوقيت الصيفي/الشتوي أو باختلاف منطقة الطالب.
+            draft.startTimeMs = draft.startTime ? new Date(draft.startTime).getTime() : null;
+            draft.endTimeMs = draft.endTime ? new Date(draft.endTime).getTime() : null;
 
             if(!draft.title) {
                 alert('الرجاء إدخال عنوان الامتحان على الأقل.');
