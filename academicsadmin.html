@@ -735,7 +735,26 @@
             setTimeout(() => window.print(), 50);
         };
 
+        // يحاول استخراج رقم (أكاديمي/تسلسلي/جلوس...) من بيانات الطالب لترتيب النتائج تصاعديًا
+        function extractSortNumber(sub) {
+            if (!sub.studentData) return null;
+            const numEntry = Object.entries(sub.studentData).find(([k]) => k.includes('رقم'));
+            if (!numEntry) return null;
+            const digits = String(numEntry[1]).replace(/[^\d.]/g, '');
+            return digits ? parseFloat(digits) : null;
+        }
+
         function renderSubmissionsList(exam, subs, isFilterRender) {
+            // ترتيب تصاعدي حسب الرقم الأكاديمي/التسلسلي (لو موجود في بيانات الطالب)، ومن لا رقم له يُوضع في الآخر
+            subs = [...subs].sort((a, b) => {
+                const na = extractSortNumber(a);
+                const nb = extractSortNumber(b);
+                if (na === null && nb === null) return 0;
+                if (na === null) return 1;
+                if (nb === null) return -1;
+                return na - nb;
+            });
+
             window.appState.currentReportExam = exam;
             if (!isFilterRender) window.appState.currentReportSubs = subs;
 
@@ -790,17 +809,31 @@
                     scoreHtml = `
                         <div class="flex flex-col items-center justify-center p-2 sm:p-3 rounded-xl border ${scoreColor} min-w-[70px] sm:min-w-[90px] shrink-0">
                             <span class="text-xl sm:text-2xl font-black">${sub.manualScoreLabel || computedScoreText}</span>
-                            <span class="text-[10px] sm:text-xs font-bold opacity-80 text-center">${sub.manualScoreLabel ? 'درجة معدَّلة' : 'الدرجة'}</span>
+                            <span class="text-[10px] sm:text-xs font-bold opacity-80 text-center">الدرجة</span>
                         </div>
                     `;
                 }
 
                 let studentDataHtml = '';
                 let studentName = 'بدون اسم';
+                let numberBadgeHtml = '';
                 if(sub.studentData) {
                     const entries = Object.entries(sub.studentData);
-                    if (entries.length) studentName = entries[0][1];
+                    // نحدد حقل "الرقم" (أكاديمي/تسلسلي/جلوس...) ليظهر فوق الاسم
+                    const numberEntry = entries.find(([k]) => k.includes('رقم'));
+                    // نحدد حقل "الاسم" الصريح إن وجد، وإلا أول حقل غير حقل الرقم
+                    const nameEntry = entries.find(([k]) => k.includes('اسم'))
+                        || entries.find(([k]) => !numberEntry || k !== numberEntry[0])
+                        || entries[0];
+                    if (nameEntry) studentName = nameEntry[1];
+
+                    if (numberEntry) {
+                        numberBadgeHtml = `<div class="text-xs sm:text-sm font-bold text-brand-600 bg-brand-50 inline-block px-2 py-0.5 rounded mb-1.5 w-fit">${numberEntry[0]}: <span dir="ltr">${numberEntry[1]}</span></div>`;
+                    }
+
                     entries.forEach(([key, value]) => {
+                        if (numberEntry && key === numberEntry[0]) return; // الرقم ظاهر بالفعل فوق الاسم
+                        if (nameEntry && key === nameEntry[0]) return; // الاسم ظاهر بالفعل كعنوان
                         studentDataHtml += `<div class="text-xs sm:text-sm truncate w-full"><span class="text-slate-500">${key}:</span> <span class="font-bold text-slate-800">${value}</span></div>`;
                     });
                 }
@@ -809,6 +842,7 @@
                     <div id="sub-card-${sub.id}" class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 print:border-b-4 print:border-black print:mb-10 print:shadow-none print:break-inside-avoid w-full overflow-hidden transition-all">
                         <div class="flex justify-between items-start mb-4 pb-4 border-b border-slate-100 gap-3 w-full">
                             <button onclick="window.toggleSubmissionBody('${sub.id}')" class="overflow-hidden w-full flex-1 text-right">
+                                ${numberBadgeHtml}
                                 <h4 class="text-base sm:text-lg font-heading font-black text-brand-700 mb-2 flex items-center gap-2">
                                     <i id="sub-toggle-icon-${sub.id}" class="fa-solid fa-chevron-down text-xs text-slate-400 transition-transform no-print"></i>
                                     ${studentName}
