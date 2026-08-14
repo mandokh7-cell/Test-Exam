@@ -15,20 +15,24 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
         import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-        import { getFirestore, collection, getDocs, setDoc, addDoc, doc, getDoc, serverTimestamp, query, where } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+        import { initializeFirestore, collection, getDocs, setDoc, addDoc, doc, getDoc, serverTimestamp, query, where } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
         const firebaseConfig = {
-            apiKey: "AIzaSyBd_Q5f62VsOsmD9wjSpV8mGJpefoXYihE",
-            authDomain: "exam-91bae.firebaseapp.com",
-            projectId: "exam-91bae",
-            storageBucket: "exam-91bae.firebasestorage.app",
-            messagingSenderId: "347396759893",
-            appId: "1:347396759893:web:868523de7dd6d63e9c8fdc"
+            apiKey: "AIzaSyC0Ado7BIqKI79ZTEgmPyB4eC6MkWJDDKI",
+            authDomain: "academics-cd206.firebaseapp.com",
+            projectId: "academics-cd206",
+            storageBucket: "academics-cd206.firebasestorage.app",
+            messagingSenderId: "283802643566",
+            appId: "1:283802643566:web:1cbe3650ac44d759f54a7f"
         };
         
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
-        const db = getFirestore(app);
+        
+        const db = initializeFirestore(app, {
+            experimentalAutoDetectLongPolling: true,
+            useFetchStreams: false
+        });
 
         window.db = db;
         window.auth = auth;
@@ -42,9 +46,7 @@
         window.query = query;
         window.where = where;
 
-        // ==================== مزامنة الوقت مع السيرفر ====================
-        // نحسب الفارق بين ساعة جهاز الطالب ووقت سيرفر Firestore الفعلي،
-        // حتى لو الطالب غيّر ساعة جهازه لا يتأثر حساب الوقت المتبقي في الامتحان.
+        
         window.serverTimeOffsetMs = 0;
         window.syncServerTime = async () => {
             try {
@@ -189,27 +191,6 @@
             50% { transform: translateY(-12px); }
         }
         .animate-float { animation: float 5s ease-in-out infinite; }
-
-        /* إحساس التنقل بين الأسئلة: مش "قفزة" مفاجئة، فيه ترانزيشن بسيط بيدي شعور إن سؤال خلص وسؤال جديد بدأ */
-        #question-card { transition: opacity 0.18s ease, transform 0.22s cubic-bezier(0.4, 0, 0.2, 1); }
-        #question-card.q-transition-out { opacity: 0; transform: translateY(14px) scale(0.99); }
-        #question-card.q-transition-in { opacity: 1; transform: translateY(0) scale(1); }
-
-        /* نبضة بسيطة على رقم السؤال كل ما ينتقل الطالب لسؤال جديد */
-        @keyframes numPop { 0% { transform: scale(0.7); } 55% { transform: scale(1.25); } 100% { transform: scale(1); } }
-        .num-pop { animation: numPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
-
-        /* نبضة على الاختيار وقت الضغط عليه، عشان الطالب يحس إن اختياره "استقر" فعلاً */
-        @keyframes optionPop { 0% { transform: scale(1); } 40% { transform: scale(1.025); } 100% { transform: scale(1); } }
-        .option-pop label { animation: optionPop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1); }
-
-        @keyframes checkPop { 0% { transform: scale(0.4) rotate(-15deg); } 60% { transform: scale(1.3) rotate(5deg); } 100% { transform: scale(1) rotate(0deg); } }
-        .option-pop .fa-check { animation: checkPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
-
-        /* هايلايتر خفيف حوالين الاختيار المحدد */
-        #options-container input.peer:checked + label {
-            box-shadow: 0 0 0 4px rgba(49, 70, 179, 0.08), 0 8px 20px -6px rgba(49, 70, 179, 0.15);
-        }
     </style>
 </head>
 <body class="flex flex-col min-h-screen text-slate-800 font-sans relative">
@@ -314,7 +295,7 @@
                     </h2>
                     
                     <h3 class="text-xl sm:text-2xl md:text-3xl font-bold text-brand-600 mt-2 mb-10 tracking-wide relative inline-block z-10">
-                        أسهل، أسرع، وأكثر أمانًا 
+                        .أسهل، أسرع، وأكثر أمانًا 
     
                         <svg class="absolute w-[105%] h-3 sm:h-4 -bottom-1.5 sm:-bottom-2 -right-[2.5%] text-brand-400/50 -z-10" viewBox="0 0 200 20" fill="none" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none">
                             <path d="M 5 15 Q 100 0 195 15" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
@@ -544,7 +525,7 @@
                     </div>
                 </div>
 
-                <div id="question-card" class="bg-white p-6 md:p-14 shadow-premium rounded-[2.5rem] mb-8 min-h-[400px] flex flex-col relative border border-slate-50 w-full overflow-hidden">
+                <div class="bg-white p-6 md:p-14 shadow-premium rounded-[2.5rem] mb-8 min-h-[400px] flex flex-col relative border border-slate-50 w-full overflow-hidden">
                     <div class="absolute top-12 bottom-12 right-0 w-1.5 bg-brand-50 rounded-l-full hidden sm:block"></div>
 
                     <div class="flex flex-wrap items-center gap-4 mb-8 w-full">
@@ -565,15 +546,15 @@
                 </div>
 
                 <div class="flex justify-between items-center px-2 md:px-4 w-full gap-2">
-                    <button id="prev-btn" onclick="window.prevQuestion()" class="bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-800 font-bold py-3 px-4 sm:py-4 sm:px-8 rounded-2xl transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed shadow-sm border border-slate-200 flex items-center gap-2 shrink-0 active:scale-95">
+                    <button id="prev-btn" onclick="window.prevQuestion()" class="bg-white hover:bg-slate-50 text-slate-500 hover:text-slate-800 font-bold py-3 px-4 sm:py-4 sm:px-8 rounded-2xl transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed shadow-sm border border-slate-200 flex items-center gap-2 shrink-0">
                         <i class="fa-solid fa-angle-right text-sm"></i> <span class="hidden sm:inline">السابق</span>
                     </button>
                     
-                    <button id="next-btn" onclick="window.nextQuestion()" class="flex-grow sm:flex-grow-0 sm:min-w-[200px] bg-slate-900 hover:bg-black text-white font-bold py-3 sm:py-4 px-6 sm:px-10 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 hover:-translate-y-1 active:scale-95 flex items-center justify-center gap-2">
+                    <button id="next-btn" onclick="window.nextQuestion()" class="flex-grow sm:flex-grow-0 sm:min-w-[200px] bg-slate-900 hover:bg-black text-white font-bold py-3 sm:py-4 px-6 sm:px-10 rounded-2xl shadow-lg hover:shadow-xl transition-all duration-200 hover:-translate-y-1 flex items-center justify-center gap-2">
                         التالي <i class="fa-solid fa-angle-left text-sm"></i>
                     </button>
                     
-                    <button id="submit-btn" onclick="window.confirmSubmit()" class="hidden flex-grow sm:flex-grow-0 sm:min-w-[200px] bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 sm:py-4 px-6 sm:px-10 rounded-2xl shadow-[0_10px_20px_rgba(49,70,179,0.3)] hover:-translate-y-1 active:scale-95 transition-all duration-200 flex items-center justify-center gap-2">
+                    <button id="submit-btn" onclick="window.confirmSubmit()" class="hidden flex-grow sm:flex-grow-0 sm:min-w-[200px] bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 sm:py-4 px-6 sm:px-10 rounded-2xl shadow-[0_10px_20px_rgba(49,70,179,0.3)] hover:-translate-y-1 transition-all duration-200 flex items-center justify-center gap-2">
                         إنهاء وتسليم <i class="fa-solid fa-check"></i>
                     </button>
                 </div>
@@ -785,6 +766,7 @@
         let currentStudentKey = '';
         let timerInterval;
         let examEndTime;
+        let isSubmitting = false; // يمنع أي محاولة تسليم مزدوجة أو رسم سؤال بعد بدء الإرسال
 
         const views = {
             home: document.getElementById('home-view'),
@@ -820,6 +802,9 @@
                     () => {
                         clearInterval(timerInterval);
                         localStorage.removeItem(window.getStorageKey());
+                        isSubmitting = false; // إعادة ضبط دفاعية، عشان الدخول القادم يبدأ نظيفًا دائمًا
+                        const submitBtn = document.getElementById('submit-btn');
+                        if (submitBtn) { submitBtn.disabled = false; submitBtn.innerHTML = 'إنهاء وتسليم <i class="fa-solid fa-check"></i>'; }
                         targetAction();
                     }
                 );
@@ -1016,6 +1001,10 @@
             document.getElementById('total-questions-num').innerText = selectedExam.questions.length;
             window.switchView('exam');
             window.initLocalSession();
+            // إذا كانت initLocalSession قد اكتشفت أن الوقت انتهى بالفعل وبدأت تسليمًا تلقائيًا
+            // في الخلفية، لا نرسم السؤال إطلاقًا (كان هذا يسبب ظهور زر "جاري الإرسال" عالقًا
+            // للطالب فور دخوله، بدل شاشة "جاري التسليم" واضحة).
+            if (isSubmitting) return;
             window.renderQuestion();
 
             if (startBtn) { startBtn.disabled = false; startBtn.innerHTML = 'دخول الامتحان <i class="fa-solid fa-arrow-left"></i>'; }
@@ -1024,13 +1013,23 @@
         window.getStorageKey = () => { return `alzain_exam_${selectedExam.id}_${currentStudentKey}`; };
 
         window.initLocalSession = () => {
+            // ⚠️ دائمًا نصفّر علامة "جاري الإرسال" عند بدء جلسة امتحان جديدة تمامًا،
+            // حتى لا يرث الدخول الجديد حالة معلّقة من محاولة تسليم سابقة في نفس الجلسة (نفس التاب).
+            isSubmitting = false;
             const savedData = localStorage.getItem(window.getStorageKey());
             const now = window.trustedNow();
             if (savedData) {
                 const parsedData = JSON.parse(savedData);
                 studentAnswers = parsedData.answers || {};
                 examEndTime = parsedData.endTime;
-                if (now > examEndTime) { window.submitExamToFirebase(true); return; }
+                currentQuestionIndex = 0;
+                if (now > examEndTime) {
+                    // نوضّح للطالب فورًا إن اللي بيحصل هو "انتهى الوقت" مش تعليق/عطل —
+                    // كان بيظهر "جاري الإرسال" بلا أي تفسير فيبان وكأنه عالق.
+                    window.showModal('انتهى وقت الامتحان', 'الوقت المخصص لهذا الامتحان انتهى بالفعل، جاري تسجيل تسليم إجاباتك تلقائيًا... من فضلك لا تغلق الصفحة.', 'info');
+                    window.submitExamToFirebase(true);
+                    return;
+                }
             } else {
                 // موعد نهاية موحّد لكل الطلاب إن كان الأدمن قد حدد وقت بداية للامتحان،
                 // وإلا نرجع للسلوك القديم (ساعة كاملة من لحظة دخول هذا الطالب تحديدًا).
@@ -1051,28 +1050,15 @@
             document.getElementById('answered-count').innerText = answeredCount;
         };
 
-        window.handleAnswerSelection = (qIndex, selectedValue, inputEl) => {
+        window.handleAnswerSelection = (qIndex, selectedValue) => {
             studentAnswers[qIndex] = selectedValue;
             window.saveProgressLocally();
-
-            // نبضة بسيطة على الاختيار المحدد عشان الطالب يحس إن اختياره اتسجل فعلاً
-            if (inputEl) {
-                const wrapper = inputEl.closest('.relative.w-full.group');
-                if (wrapper) {
-                    wrapper.classList.remove('option-pop');
-                    void wrapper.offsetWidth; // إعادة تشغيل الأنيميشن حتى لو نفس الاختيار
-                    wrapper.classList.add('option-pop');
-                }
-            }
         };
 
         window.renderQuestion = () => {
+            if (isSubmitting) return; // لا نرسم أي سؤال بعد بدء عملية التسليم
             const q = selectedExam.questions[currentQuestionIndex];
-            const numEl = document.getElementById('current-question-num');
-            numEl.innerText = currentQuestionIndex + 1;
-            numEl.classList.remove('num-pop');
-            void numEl.offsetWidth;
-            numEl.classList.add('num-pop');
+            document.getElementById('current-question-num').innerText = currentQuestionIndex + 1;
             document.getElementById('question-text').innerText = q.text;
             
             const badge = document.getElementById('question-type-badge');
@@ -1090,7 +1076,7 @@
                     
                     const optionHTML = `
                         <div class="relative w-full group">
-                            <input type="radio" name="q-${currentQuestionIndex}" id="opt-${idx}" value="${option}" class="peer sr-only" onchange="window.handleAnswerSelection(${currentQuestionIndex}, '${option}', this)" ${isChecked}>
+                            <input type="radio" name="q-${currentQuestionIndex}" id="opt-${idx}" value="${option}" class="peer sr-only" onchange="window.handleAnswerSelection(${currentQuestionIndex}, '${option}')" ${isChecked}>
                             <label for="opt-${idx}" class="flex items-center p-4 md:p-6 cursor-pointer rounded-2xl w-full transition-all duration-300 border-2 border-slate-100 bg-white hover:border-slate-300 hover:bg-slate-50 peer-checked:border-brand-600 peer-checked:bg-brand-50/50 peer-checked:shadow-[0_8px_20px_-6px_rgba(49,70,179,0.15)] break-words">
                                 <div class="w-6 h-6 shrink-0 md:w-7 md:h-7 rounded-full border-2 border-slate-300 mr-2 md:mr-4 ml-3 flex items-center justify-center transition-all duration-300 peer-checked:border-brand-600 peer-checked:bg-brand-600">
                                     <i class="fa-solid fa-check text-white opacity-0 scale-50 transition-all duration-300 peer-checked:opacity-100 peer-checked:scale-100 text-[10px]"></i>
@@ -1116,22 +1102,8 @@
             }
         };
 
-        // بدل ما السؤال الجديد يظهر فجأة، بنعمل ترانزيشن بسيط (يختفي بهدوء ويظهر السؤال الجديد بحركة خفيفة)
-        // عشان الطالب يحس إن السؤال اتغيّر فعلاً، مش مجرد نص بيتبدل جامد.
-        window.goToQuestion = (updateIndexFn) => {
-            const card = document.getElementById('question-card');
-            card.classList.add('q-transition-out');
-            setTimeout(() => {
-                updateIndexFn();
-                window.renderQuestion();
-                card.classList.remove('q-transition-out');
-                card.classList.add('q-transition-in');
-                setTimeout(() => card.classList.remove('q-transition-in'), 220);
-            }, 160);
-        };
-
-        window.nextQuestion = () => { if (currentQuestionIndex < selectedExam.questions.length - 1) window.goToQuestion(() => currentQuestionIndex++); };
-        window.prevQuestion = () => { if (currentQuestionIndex > 0) window.goToQuestion(() => currentQuestionIndex--); };
+        window.nextQuestion = () => { if (currentQuestionIndex < selectedExam.questions.length - 1) { currentQuestionIndex++; window.renderQuestion(); } };
+        window.prevQuestion = () => { if (currentQuestionIndex > 0) { currentQuestionIndex--; window.renderQuestion(); } };
 
         window.startTimer = () => {
             clearInterval(timerInterval);
@@ -1187,11 +1159,62 @@
             }
         };
 
+        // زر "إعادة المحاولة يدويًا" يظهر إذا طالت مدة الإرسال، حتى لا يشعر الطالب أنه "عالق" بلا أي فعل ممكن.
+        let stuckHintTimer = null;
+        function showStuckHint(btn) {
+            clearTimeout(stuckHintTimer);
+            let hint = document.getElementById('submit-stuck-hint');
+            if (!hint) {
+                hint = document.createElement('div');
+                hint.id = 'submit-stuck-hint';
+                hint.className = 'hidden w-full text-center mt-3 text-sm';
+                btn?.parentElement?.appendChild(hint);
+            }
+            hint.classList.add('hidden');
+            hint.innerHTML = '';
+            // بعد 6 ثوانٍ من "جاري الإرسال" بدون رد: نظهر تطمين + زر إعادة محاولة صريح.
+            stuckHintTimer = setTimeout(() => {
+                if (!isSubmitting) return;
+                hint.classList.remove('hidden');
+                hint.innerHTML = `
+                    <span class="text-slate-500 font-bold block mb-2">
+                        <i class="fa-solid fa-circle-info"></i> الاتصال بطيء، إجاباتك محفوظة على جهازك ولن تُفقد.
+                    </span>
+                    <button type="button" onclick="window.forceRetrySubmit()" class="text-brand-600 hover:text-brand-800 font-bold underline text-sm">
+                        اضغط هنا لإعادة المحاولة الآن
+                    </button>`;
+            }, 6000);
+        }
+
+        // إعادة محاولة يدوية آمنة: بما أن معرّف التسليم أصبح ثابتًا (مبنيًا على الطالب + الامتحان)
+        // وليس عشوائيًا، إعادة الإرسال أكثر من مرة لا تُنشئ نسخًا مكررة أبدًا — نفس السجل يُحدَّث فقط.
+        window.forceRetrySubmit = () => {
+            isSubmitting = false;
+            clearTimeout(stuckHintTimer);
+            const hint = document.getElementById('submit-stuck-hint');
+            if (hint) hint.classList.add('hidden');
+            window.submitExamToFirebase(window.__lastSubmitWasAuto === true);
+        };
+
         window.submitExamToFirebase = async (isAutoSubmit = false) => {
+            if (isSubmitting) return; // منع أي تسليم مزدوج (نقرة إضافية، أو تسليم تلقائي متزامن مع نقرة يدوية)
+            isSubmitting = true;
+            window.__lastSubmitWasAuto = isAutoSubmit;
             clearInterval(timerInterval);
+
+            // نوضّح فورًا (قبل بدء الإرسال الفعلي) إن السبب هو انتهاء الوقت، مش عطل —
+            // بديل عن إظهار "جاري الإرسال" وحدها بلا أي سياق.
+            if (isAutoSubmit) {
+                window.showModal('انتهى وقت الامتحان', 'انتهى الوقت المخصص لهذا الامتحان، جاري تسجيل تسليم إجاباتك تلقائيًا الآن... من فضلك لا تغلق الصفحة.', 'info');
+            }
+
             const btn = document.getElementById('submit-btn');
-            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإرسال...';
-            btn.disabled = true;
+            if (btn) {
+                btn.classList.remove('hidden');
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> جاري الإرسال...';
+                btn.disabled = true;
+            }
+            showStuckHint(btn);
 
             const submissionData = {
                 examId: selectedExam.id,
@@ -1202,11 +1225,12 @@
                 submittedAtServer: window.serverTimestamp()
             };
 
-            // ملاحظة: كل تسليم يأخذ معرّفًا عشوائيًا جديدًا (وليس معرّفًا ثابتًا مبنيًا
-            // على هوية الطالب) — أي طالب يمكنه الدخول والتسليم أكثر من مرة بلا قيود،
-            // وستظهر كل محاولة كسجل منفصل في لوحة تحكم الأدمن.
+            // ⚠️ معرّف تسليم ثابت (مبني على الامتحان + هوية الطالب) بدل معرّف عشوائي:
+            // لو الشبكة بطيئة والطالب/الجهاز أعاد المحاولة (تلقائيًا أو يدويًا)، نفس المستند
+            // يُكتب فوق نفسه (merge) بدل إنشاء نسخة تسليم مكررة — مهم جدًا مع دخول 200 طالب دفعة واحدة.
+            const submissionId = `${selectedExam.id}_${currentStudentKey}`;
 
-            // مهلة قصوى 20 ثانية: التسليم لا يظل "معلّقًا" إلى الأبد أبدًا،
+            // مهلة قصوى 15 ثانية: التسليم لا يظل "معلّقًا" إلى الأبد أبدًا،
             // حتى لو حدث خلل غير متوقع في الاتصال بالسيرفر.
             const withTimeout = (promise, ms) => Promise.race([
                 promise,
@@ -1214,49 +1238,24 @@
             ]);
 
             try {
-                const submissionRef = await withTimeout(
-                    window.addDoc(window.collection(window.db, "submissions"), submissionData),
-                    20000
+                await withTimeout(
+                    window.setDoc(window.doc(window.db, "submissions", submissionId), submissionData, { merge: true }),
+                    15000
                 );
-                const submissionId = submissionRef.id;
 
-                if (isAutoSubmit) {
-                    window.showModal('انتهى الوقت', 'انتهى وقت الاختبار. تم حفظ وتسليم إجاباتك تلقائياً.', 'info');
-                }
+                clearTimeout(stuckHintTimer);
+                document.getElementById('submit-stuck-hint')?.classList.add('hidden');
+                window.closeModal(); // نقفل رسالة "انتهى الوقت" اللي ظهرت بداية العملية، بدل ما تفضل عالقة فوق شاشة النهاية
+                isSubmitting = false; // ⚠️ التصحيح الأهم: كانت هذه العلامة تفضل true للأبد بعد أي تسليم ناجح
+                                       // وده كان يمنع رسم أي امتحان جديد في نفس الجلسة (تفضل شاشة "جاري الإرسال" عالقة)
 
                 const firstKey = Object.keys(currentStudentData)[0];
                 document.getElementById('end-student-name').innerText = currentStudentData[firstKey] || 'طالب';
                 document.getElementById('submission-id-display').innerText = submissionId.slice(-10).toUpperCase();
 
-                // الدرجة تظهر للطالب فقط لو الأدمن فعّل خيار "إظهار النتيجة" لهذا الامتحان.
-                // نجيب مفتاح الإجابات الصحيحة بعد ما التسليم يتقفل خلاص (status: submitted)،
-                // مش قبل كده أبدًا، عشان محدش يقدر يشوف الحل وهو لسه بيحل.
-                const scoreContainer = document.getElementById('score-display-container');
-                if (selectedExam.showScoreToStudent) {
-                    try {
-                        const answersSnap = await window.getDoc(window.doc(window.db, "exam_answers", selectedExam.id));
-                        const answersMap = answersSnap.exists() ? (answersSnap.data().answers || {}) : {};
-                        let correctCount = 0, totalMcqs = 0;
-                        selectedExam.questions.forEach((q, idx) => {
-                            if (q.type === 'mcq' || !q.type) {
-                                totalMcqs++;
-                                const correctText = (q.options && q.options[answersMap[idx]]) ? q.options[answersMap[idx]] : null;
-                                if (correctText !== null && studentAnswers[idx] === correctText) correctCount++;
-                            }
-                        });
-                        if (totalMcqs > 0) {
-                            document.getElementById('student-score-text').innerText = `${correctCount} / ${totalMcqs}`;
-                            scoreContainer.classList.remove('hidden');
-                        } else {
-                            scoreContainer.classList.add('hidden');
-                        }
-                    } catch (e) {
-                        console.error("Could not load score:", e);
-                        scoreContainer.classList.add('hidden');
-                    }
-                } else {
-                    scoreContainer.classList.add('hidden');
-                }
+                // لا يتم حساب أو عرض الدرجة هنا إطلاقًا: الإجابات الصحيحة غير موجودة
+                // في متصفح الطالب لأي سبب أمني. الدرجة تُحتسب من لوحة تحكم الأدمن فقط.
+                document.getElementById('score-display-container')?.classList.add('hidden');
 
                 window.switchView('end');
                 localStorage.removeItem(window.getStorageKey());
@@ -1264,25 +1263,32 @@
             } catch (error) {
                 console.error("Error submitting submission | code:", error?.code, "| message:", error?.message, error);
 
+                isSubmitting = false; // نسمح بإعادة المحاولة (يدويًا أو تلقائيًا) بعد أي فشل
+                clearTimeout(stuckHintTimer);
+                document.getElementById('submit-stuck-hint')?.classList.add('hidden');
+
                 if (error?.code === 'permission-denied') {
                     window.showModal(
                         'تعذّر التسليم',
                         'تم رفض العملية من السيرفر. أبلغ المشرف فورًا واذكر له: permission-denied.',
                         'error'
                     );
-                    btn.innerHTML = 'إنهاء وتسليم <i class="fa-solid fa-check"></i>';
-                    btn.disabled = false;
+                    if (btn) { btn.innerHTML = 'إنهاء وتسليم <i class="fa-solid fa-check"></i>'; btn.disabled = false; }
                     return;
                 }
 
                 if (error?.code === 'client-timeout') {
-                    window.showRetryModalThrottled('تأخر الاتصال', 'الاتصال بالسيرفر بطيء جدًا أو منقطع. إجاباتك محفوظة على جهازك بأمان، سنعيد المحاولة تلقائيًا — لا تغلق الصفحة.');
+                    window.showRetryModalThrottled('تأخر الاتصال', 'الاتصال بالسيرفر بطيء جدًا أو منقطع. إجاباتك محفوظة على جهازك بأمان — اضغط "إعادة المحاولة" أو انتظر المحاولة التلقائية.');
                 } else {
                     window.showRetryModalThrottled('خطأ في الإرسال', `حدث خطأ أثناء الإرسال (${error?.code || 'غير معروف'}). سيتم إعادة المحاولة تلقائيًا، يرجى عدم إغلاق الصفحة.`);
                 }
 
-                btn.innerHTML = 'إنهاء وتسليم <i class="fa-solid fa-check"></i>';
-                btn.disabled = false;
+                if (btn) { btn.innerHTML = 'إنهاء وتسليم <i class="fa-solid fa-check"></i>'; btn.disabled = false; }
+
+                // إعادة محاولة تلقائية فعلية بعد فشل التسليم التلقائي (بدل ترك الطالب عالقًا بلا أي فعل)
+                if (isAutoSubmit) {
+                    setTimeout(() => { if (!isSubmitting) window.submitExamToFirebase(true); }, 5000);
+                }
                 window.startTimer();
             }
         };
