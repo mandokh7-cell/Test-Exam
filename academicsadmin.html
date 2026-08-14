@@ -11,12 +11,14 @@
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
     <!-- FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- SheetJS (لاستيراد وتصدير ملفات إكسل) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, getDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, getDoc, updateDoc, addDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
         // Tailwind Configuration
         tailwind.config = {
@@ -840,6 +842,115 @@
 
         window.printReports = () => window.print();
 
+        // ============== استيراد وتصدير الدرجات (Excel) ==============
+
+        // يحسب درجة أي تسليم بنفس طريقة العرض، لاستخدامها في التصدير
+        function computeSubmissionScore(exam, sub) {
+            const questions = (exam && exam.questions) || [];
+            const mcqQuestions = questions.filter(q => q.type === 'mcq' || !q.type);
+            const totalMcqs = mcqQuestions.length;
+            let correctCount = 0;
+            questions.forEach((q, qIndex) => {
+                if (q.type === 'mcq' || !q.type) {
+                    const studentAns = sub.rawAnswers ? sub.rawAnswers[qIndex] : null;
+                    const correctAnsText = (q.options && q.options[q.correctOption]) ? q.options[q.correctOption] : 'غير محدد';
+                    if (studentAns === correctAnsText) correctCount++;
+                }
+            });
+            return totalMcqs > 0 ? `${correctCount}/${totalMcqs}` : '-';
+        }
+
+        // رفع ملف إكسل يحتوي على درجات، وإضافتها كتسليمات (submissions) لهذا الامتحان.
+        // آخر عمود في الملف (أو أي عمود يحتوي كلمة "درجة") يُعتبر عمود الدرجة، وباقي الأعمدة تُخزَّن كبيانات الطالب.
+        window.handleImportGrades = async (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const examId = document.getElementById('report-exam-title').dataset.examId;
+            if (!examId) {
+                alert('يرجى فتح تقرير امتحان أولاً قبل رفع الدرجات.');
+                event.target.value = '';
+                return;
+            }
+
+            try {
+                const buffer = await file.arrayBuffer();
+                const workbook = XLSX.read(buffer);
+                const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                const rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+                if (rows.length === 0) {
+                    alert('الملف فارغ أو غير صالح.');
+                    event.target.value = '';
+                    return;
+                }
+
+                const headers = Object.keys(rows[0]);
+                const scoreKey = headers.find(h => h.includes('درجة') || h.toLowerCase().includes('grade') || h.toLowerCase().includes('score')) || headers[headers.length - 1];
+                const dataKeys = headers.filter(h => h !== scoreKey);
+
+                if (!confirm(`سيتم إضافة ${rows.length} صف كنتائج لهذا الامتحان.\nسيُعتبر عمود "${scoreKey}" هو عمود الدرجة، وباقي الأعمدة بيانات الطالب.\nمتابعة؟`)) {
+                    event.target.value = '';
+                    return;
+                }
+
+                let successCount = 0;
+                for (const row of rows) {
+                    const studentData = {};
+                    dataKeys.forEach(k => { studentData[k] = String(row[k] ?? '').trim(); });
+                    if (Object.values(studentData).every(v => !v)) continue; // تجاهل الصفوف الفارغة تمامًا
+
+                    const scoreVal = String(row[scoreKey] ?? '').trim();
+
+                    await addDoc(getSubmissionsRef(), {
+                        examId,
+                        status: 'submitted',
+                        studentData,
+                        rawAnswers: {},
+                        manualScoreLabel: scoreVal || null,
+                        submittedAt: Date.now(),
+                        importedFromExcel: true
+                    });
+                    successCount++;
+                }
+
+                alert(`تم استيراد ${successCount} نتيجة بنجاح.`);
+            } catch (err) {
+                console.error('Import error:', err);
+                alert('حدث خطأ أثناء قراءة الملف. تأكد أن الملف بصيغة إكسل صحيحة (xlsx/xls/csv).');
+            } finally {
+                event.target.value = '';
+            }
+        };
+
+        // تصدير الدرجات المعروضة حاليًا كملف إكسل، بدون عمود تاريخ التسليم
+        window.exportGradesExcel = () => {
+            const exam = window.appState.currentReportExam;
+            const subs = window.appState.currentReportSubs || [];
+
+            if (!subs.length) {
+                alert('لا يوجد نتائج لتصديرها لهذا الامتحان.');
+                return;
+            }
+
+            const rows = subs.map(sub => {
+                const row = {};
+                if (sub.studentData) {
+                    Object.entries(sub.studentData).forEach(([key, value]) => { row[key] = value; });
+                }
+                // ملاحظة: تاريخ التسليم لا يُضاف عمدًا لملف التصدير
+                row['الدرجة'] = sub.manualScoreLabel || computeSubmissionScore(exam, sub);
+                return row;
+            });
+
+            const ws = XLSX.utils.json_to_sheet(rows);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, 'الدرجات');
+
+            const examTitle = (exam && exam.title) ? exam.title.replace(/[\\/:*?"<>|]/g, '').trim() : 'نتائج';
+            XLSX.writeFile(wb, `${examTitle || 'نتائج'}.xlsx`);
+        };
+
     </script>
     
     <style>
@@ -1111,9 +1222,18 @@
                             <p id="report-exam-title" class="text-xs sm:text-sm text-brand-600 font-bold bg-brand-50 inline-block px-2 py-0.5 rounded truncate max-w-full">اسم الامتحان</p>
                         </div>
                     </div>
-                    <button onclick="printReports()" class="w-full sm:w-auto bg-slate-800 hover:bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition flex items-center justify-center gap-2 shrink-0">
-                        <i class="fa-solid fa-print"></i> طباعة كـ PDF
-                    </button>
+                    <div class="no-print flex flex-wrap items-center gap-2 w-full sm:w-auto">
+                        <input type="file" id="import-grades-input" accept=".xlsx,.xls,.csv" class="hidden" onchange="window.handleImportGrades(event)">
+                        <button onclick="document.getElementById('import-grades-input').click()" class="flex-1 sm:flex-none bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition flex items-center justify-center gap-2 shrink-0">
+                            <i class="fa-solid fa-file-import"></i> رفع درجات Excel
+                        </button>
+                        <button onclick="window.exportGradesExcel()" class="flex-1 sm:flex-none bg-brand-600 hover:bg-brand-700 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition flex items-center justify-center gap-2 shrink-0">
+                            <i class="fa-solid fa-file-export"></i> حفظ كملف Excel
+                        </button>
+                        <button onclick="printReports()" class="flex-1 sm:flex-none bg-slate-800 hover:bg-slate-900 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-sm transition flex items-center justify-center gap-2 shrink-0">
+                            <i class="fa-solid fa-print"></i> طباعة كـ PDF
+                        </button>
+                    </div>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-8 no-print w-full">
