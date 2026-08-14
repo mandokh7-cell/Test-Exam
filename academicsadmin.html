@@ -16,7 +16,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
         import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+        import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc, getDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
         // Tailwind Configuration
         tailwind.config = {
@@ -29,12 +29,12 @@
         }
 
         const firebaseConfig = {
-            apiKey: "AIzaSyBd_Q5f62VsOsmD9wjSpV8mGJpefoXYihE",
-            authDomain: "exam-91bae.firebaseapp.com",
-            projectId: "exam-91bae",
-            storageBucket: "exam-91bae.firebasestorage.app",
-            messagingSenderId: "347396759893",
-            appId: "1:347396759893:web:868523de7dd6d63e9c8fdc"
+            apiKey: "AIzaSyC0Ado7BIqKI79ZTEgmPyB4eC6MkWJDDKI",
+            authDomain: "academics-cd206.firebaseapp.com",
+            projectId: "academics-cd206",
+            storageBucket: "academics-cd206.firebasestorage.app",
+            messagingSenderId: "283802643566",
+            appId: "1:283802643566:web:1cbe3650ac44d759f54a7f"
         };
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
@@ -421,13 +421,19 @@
                             <div class="flex items-center gap-3 mb-2 w-full">
                                 <input type="radio" name="correct-${qIndex}" ${q.correctOption === oIndex ? 'checked' : ''} onchange="window.updateCorrectOption(${qIndex}, ${oIndex})" class="w-5 h-5 shrink-0 text-brand-600 focus:ring-brand-500">
                                 <input type="text" value="${opt}" onchange="window.updateOptionText(${qIndex}, ${oIndex}, this.value)" placeholder="نص الاختيار" class="flex-1 min-w-0 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-1 focus:ring-brand-500 outline-none">
+                                <button type="button" onclick="window.removeOption(${qIndex}, ${oIndex})" ${(q.options || []).length <= 2 ? 'disabled' : ''} class="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-rose-400 hover:bg-rose-50 hover:text-rose-600 disabled:opacity-30 disabled:cursor-not-allowed transition" title="حذف الاختيار">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </button>
                             </div>
                         `;
                     });
                     innerHtml = `
                         <div class="mb-4">
-                            <label class="block text-xs font-bold text-brand-600 mb-2">الاختيارات (حدد الدائرة للإجابة الصحيحة):</label>
+                            <label class="block text-xs font-bold text-brand-600 mb-2">الاختيارات (حدد الدائرة للإجابة الصحيحة، وتحكّم في العدد كما تريد):</label>
                             ${optionsHtml}
+                            <button type="button" onclick="window.addOption(${qIndex})" class="mt-1 text-xs font-bold text-brand-600 hover:bg-brand-50 px-3 py-1.5 rounded-lg transition flex items-center gap-1.5">
+                                <i class="fa-solid fa-plus"></i> إضافة اختيار
+                            </button>
                         </div>
                     `;
                 } else {
@@ -462,6 +468,23 @@
         window.updateOptionText = (qIdx, oIdx, val) => { window.appState.examDraft.questions[qIdx].options[oIdx] = val; };
         window.updateCorrectOption = (qIdx, oIdx) => { window.appState.examDraft.questions[qIdx].correctOption = oIdx; };
         window.removeQuestion = (qIdx) => { window.appState.examDraft.questions.splice(qIdx, 1); renderQuestions(); };
+
+        // إضافة/حذف اختيار من سؤال اختياري بحرية (2، 3، 5 اختيارات... أي عدد تريده).
+        window.addOption = (qIdx) => {
+            const q = window.appState.examDraft.questions[qIdx];
+            if (!q.options) q.options = [];
+            q.options.push('');
+            renderQuestions();
+        };
+        window.removeOption = (qIdx, oIdx) => {
+            const q = window.appState.examDraft.questions[qIdx];
+            if (!q.options || q.options.length <= 2) return; // نمنع النزول تحت اختيارين
+            q.options.splice(oIdx, 1);
+            // نصحّح فهرس الإجابة الصحيحة لو انحذف قبله أو كان هو نفسه
+            if (q.correctOption === oIdx) q.correctOption = 0;
+            else if (q.correctOption > oIdx) q.correctOption -= 1;
+            renderQuestions();
+        };
 
         window.saveExam = async () => {
             const draft = window.appState.examDraft;
@@ -564,7 +587,15 @@
             }
             
             renderReportsStats(examWithAnswers, examSubs);
+            const searchInput = document.getElementById('student-search-input');
+            const isNewExam = document.getElementById('submissions-list').dataset.examId !== examId;
+            document.getElementById('submissions-list').dataset.examId = examId;
+            if (isNewExam && searchInput) {
+                searchInput.value = '';
+                document.getElementById('search-results-list').classList.add('hidden');
+            }
             renderSubmissionsList(examWithAnswers, examSubs);
+            if (searchInput && searchInput.value) window.filterSubmissions(searchInput.value); // يعيد تطبيق نفس البحث بعد أي تحديث حي
             switchPage('reports');
         };
 
@@ -603,11 +634,113 @@
             document.getElementById('stat-hardest-q').innerText = hardestQIndex !== -1 ? `سؤال ${parseInt(hardestQIndex) + 1}` : '-';
         }
 
-        function renderSubmissionsList(exam, subs) {
+        // نخزن الامتحان والتسليمات الحالية في الذاكرة عشان البحث والفلترة يشتغلوا محليًا بدون إعادة تحميل.
+        window.appState.currentReportExam = null;
+        window.appState.currentReportSubs = [];
+
+        window.filterSubmissions = (queryText) => {
+            const q = (queryText || '').trim().toLowerCase();
+            const all = window.appState.currentReportSubs || [];
+            const resultsBox = document.getElementById('search-results-list');
+
+            if (!q) {
+                resultsBox.classList.add('hidden');
+                resultsBox.innerHTML = '';
+                renderSubmissionsList(window.appState.currentReportExam, all, true);
+                return;
+            }
+
+            const matches = all.filter(sub => {
+                const values = Object.values(sub.studentData || {}).join(' ').toLowerCase();
+                return values.includes(q);
+            });
+
+            // قائمة نتائج سريعة تحت مربع البحث: الضغط على اسم يفتح إجاباته مباشرة.
+            resultsBox.classList.remove('hidden');
+            if (matches.length === 0) {
+                resultsBox.innerHTML = `<div class="text-sm text-slate-400 font-bold p-2">لا يوجد طالب مطابق للبحث.</div>`;
+            } else {
+                resultsBox.innerHTML = matches.map(sub => {
+                    const name = Object.values(sub.studentData || {})[0] || 'بدون اسم';
+                    return `<button onclick="window.jumpToSubmission('${sub.id}')" class="w-full text-right flex items-center justify-between gap-2 px-3 py-2 rounded-lg hover:bg-brand-50 text-sm font-bold text-slate-700 hover:text-brand-700 transition">
+                        <span class="truncate"><i class="fa-solid fa-user-graduate text-brand-500 ml-1"></i> ${name}</span>
+                        <i class="fa-solid fa-arrow-left text-xs text-slate-400"></i>
+                    </button>`;
+                }).join('');
+            }
+
+            renderSubmissionsList(window.appState.currentReportExam, matches, true);
+        };
+
+        window.jumpToSubmission = (subId) => {
+            document.getElementById('search-results-list').classList.add('hidden');
+            const card = document.getElementById(`sub-card-${subId}`);
+            if (!card) return;
+            card.classList.remove('hidden');
+            const body = document.getElementById(`sub-body-${subId}`);
+            if (body && body.classList.contains('hidden')) window.toggleSubmissionBody(subId);
+            card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            card.classList.add('ring-2', 'ring-brand-400');
+            setTimeout(() => card.classList.remove('ring-2', 'ring-brand-400'), 2000);
+        };
+
+        window.toggleSubmissionBody = (subId) => {
+            const body = document.getElementById(`sub-body-${subId}`);
+            const icon = document.getElementById(`sub-toggle-icon-${subId}`);
+            if (!body) return;
+            body.classList.toggle('hidden');
+            if (icon) icon.classList.toggle('fa-rotate-180');
+        };
+
+        window.deleteSubmission = async (subId) => {
+            if (!confirm('هل أنت متأكد من حذف ورقة إجابة هذا الطالب نهائيًا؟ لا يمكن التراجع.')) return;
+            try {
+                await deleteDoc(doc(db, "submissions", subId));
+            } catch (error) {
+                console.error("Error deleting submission:", error);
+                alert('حدث خطأ أثناء الحذف. تأكد أن قواعد Firestore تسمح للأدمن بالحذف (allow delete: if isAdmin();).');
+            }
+        };
+
+        window.saveManualScore = async (subId) => {
+            const input = document.getElementById(`manual-score-${subId}`);
+            const btn = document.getElementById(`manual-score-btn-${subId}`);
+            if (!input) return;
+            const val = input.value.trim();
+            if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>'; }
+            try {
+                await updateDoc(doc(db, "submissions", subId), { manualScoreLabel: val });
+                if (btn) { btn.innerHTML = '<i class="fa-solid fa-check"></i>'; setTimeout(() => { btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> حفظ'; btn.disabled = false; }, 1200); }
+            } catch (error) {
+                console.error("Error saving manual score:", error);
+                alert('تعذّر حفظ الدرجة. تأكد أن قواعد Firestore تسمح للأدمن بالتعديل (allow update: if isAdmin();).');
+                if (btn) { btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> حفظ'; btn.disabled = false; }
+            }
+        };
+
+        window.printSingleSubmission = (subId) => {
+            const card = document.getElementById(`sub-card-${subId}`);
+            const body = document.getElementById(`sub-body-${subId}`);
+            if (body) body.classList.remove('hidden');
+            document.querySelectorAll('#submissions-list > [id^="sub-card-"]').forEach(el => {
+                el.classList.toggle('hidden', el.id !== `sub-card-${subId}`);
+            });
+            const resetVisibility = () => {
+                document.querySelectorAll('#submissions-list > [id^="sub-card-"]').forEach(el => el.classList.remove('hidden'));
+                window.removeEventListener('afterprint', resetVisibility);
+            };
+            window.addEventListener('afterprint', resetVisibility);
+            setTimeout(() => window.print(), 50);
+        };
+
+        function renderSubmissionsList(exam, subs, isFilterRender) {
+            window.appState.currentReportExam = exam;
+            if (!isFilterRender) window.appState.currentReportSubs = subs;
+
             const container = document.getElementById('submissions-list');
             container.innerHTML = '';
             if (subs.length === 0) {
-                container.innerHTML = `<div class="text-center py-10 text-slate-500 font-bold">لا يوجد تسليمات لهذا الامتحان بعد.</div>`;
+                container.innerHTML = `<div class="text-center py-10 text-slate-500 font-bold">${isFilterRender ? 'لا يوجد طالب مطابق للبحث.' : 'لا يوجد تسليمات لهذا الامتحان بعد.'}</div>`;
                 return;
             }
 
@@ -648,42 +781,55 @@
                     }
                 });
 
+                const computedScoreText = totalMcqs > 0 ? `${correctCount}/${totalMcqs}` : '-';
                 if (totalMcqs > 0) {
                     const scorePercent = ((correctCount / totalMcqs) * 100).toFixed(0);
                     const scoreColor = scorePercent >= 50 ? 'text-emerald-600 bg-emerald-50 border-emerald-200' : 'text-rose-600 bg-rose-50 border-rose-200';
                     scoreHtml = `
                         <div class="flex flex-col items-center justify-center p-2 sm:p-3 rounded-xl border ${scoreColor} min-w-[70px] sm:min-w-[90px] shrink-0">
-                            <span class="text-xl sm:text-2xl font-black">${correctCount}/${totalMcqs}</span>
-                            <span class="text-[10px] sm:text-xs font-bold opacity-80 text-center">الدرجة</span>
+                            <span class="text-xl sm:text-2xl font-black">${sub.manualScoreLabel || computedScoreText}</span>
+                            <span class="text-[10px] sm:text-xs font-bold opacity-80 text-center">${sub.manualScoreLabel ? 'درجة معدَّلة' : 'الدرجة'}</span>
                         </div>
                     `;
                 }
 
                 let studentDataHtml = '';
+                let studentName = 'بدون اسم';
                 if(sub.studentData) {
-                    for (const [key, value] of Object.entries(sub.studentData)) {
+                    const entries = Object.entries(sub.studentData);
+                    if (entries.length) studentName = entries[0][1];
+                    entries.forEach(([key, value]) => {
                         studentDataHtml += `<div class="text-xs sm:text-sm truncate w-full"><span class="text-slate-500">${key}:</span> <span class="font-bold text-slate-800">${value}</span></div>`;
-                    }
+                    });
                 }
 
                 const subCard = `
-                    <div class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 print:border-b-4 print:border-black print:mb-10 print:shadow-none print:break-inside-avoid w-full overflow-hidden">
+                    <div id="sub-card-${sub.id}" class="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 print:border-b-4 print:border-black print:mb-10 print:shadow-none print:break-inside-avoid w-full overflow-hidden transition-all">
                         <div class="flex justify-between items-start mb-4 pb-4 border-b border-slate-100 gap-3 w-full">
-                            <div class="overflow-hidden w-full flex-1">
-                                <h4 class="text-base sm:text-lg font-heading font-black text-brand-700 mb-2">ورقة إجابة #${subIndex + 1}</h4>
+                            <button onclick="window.toggleSubmissionBody('${sub.id}')" class="overflow-hidden w-full flex-1 text-right">
+                                <h4 class="text-base sm:text-lg font-heading font-black text-brand-700 mb-2 flex items-center gap-2">
+                                    <i id="sub-toggle-icon-${sub.id}" class="fa-solid fa-chevron-down text-xs text-slate-400 transition-transform no-print"></i>
+                                    ${studentName}
+                                </h4>
                                 <div class="flex flex-col gap-1 w-full">
                                     ${studentDataHtml}
                                     <div class="text-xs sm:text-sm w-full mt-1 text-slate-500 truncate">التسليم: <span class="font-bold text-slate-700" dir="ltr">${sub.submittedAt ? new Date(sub.submittedAt).toLocaleString('en-GB') : 'غير مسجل'}</span></div>
                                 </div>
-                            </div>
-                            <div class="flex items-start gap-2 shrink-0">
-                                ${scoreHtml}
-                                <button onclick="window.deleteSubmission('${sub.id}')" class="no-print w-9 h-9 sm:w-10 sm:h-10 bg-slate-50 text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition rounded-xl flex items-center justify-center shrink-0" title="حذف ورقة الإجابة دي">
-                                    <i class="fa-solid fa-trash-can text-sm"></i>
-                                </button>
-                            </div>
+                            </button>
+                            ${scoreHtml}
                         </div>
-                        <div class="mt-4 w-full">
+
+                        <div class="no-print flex flex-wrap items-center gap-2 mb-4 pb-4 border-b border-slate-100">
+                            <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5">
+                                <label class="text-xs font-bold text-slate-500 whitespace-nowrap">تعديل الدرجة:</label>
+                                <input id="manual-score-${sub.id}" type="text" value="${sub.manualScoreLabel || ''}" placeholder="${computedScoreText}" class="w-20 bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm font-bold outline-none focus:ring-2 focus:ring-brand-500">
+                                <button id="manual-score-btn-${sub.id}" onclick="window.saveManualScore('${sub.id}')" class="text-xs font-bold bg-brand-600 text-white px-2.5 py-1.5 rounded-lg hover:bg-brand-700 transition"><i class="fa-solid fa-floppy-disk"></i> حفظ</button>
+                            </div>
+                            <button onclick="window.printSingleSubmission('${sub.id}')" class="text-xs font-bold bg-slate-800 text-white px-3 py-2 rounded-lg hover:bg-slate-900 transition flex items-center gap-1.5"><i class="fa-solid fa-print"></i> طباعة ورقة الطالب</button>
+                            <button onclick="window.deleteSubmission('${sub.id}')" class="text-xs font-bold bg-rose-50 text-rose-600 px-3 py-2 rounded-lg hover:bg-rose-100 transition flex items-center gap-1.5 mr-auto"><i class="fa-solid fa-trash-can"></i> حذف التسليم</button>
+                        </div>
+
+                        <div id="sub-body-${sub.id}" class="mt-4 w-full hidden">
                             ${questionsHtml}
                         </div>
                     </div>
@@ -691,17 +837,6 @@
                 container.insertAdjacentHTML('beforeend', subCard);
             });
         }
-
-        window.deleteSubmission = async (subId) => {
-            if (!confirm('هل أنت متأكد من حذف ورقة الإجابة دي؟ الإجراء ده نهائي ومش هترجع تاني.')) return;
-            try {
-                await deleteDoc(doc(getSubmissionsRef(), subId));
-                // الـ onSnapshot على submissions هيحدّث الصفحة تلقائيًا بمجرد الحذف
-            } catch (error) {
-                console.error("Error deleting submission:", error);
-                alert('حدث خطأ أثناء الحذف. تأكد من صلاحياتك كأدمن.');
-            }
-        };
 
         window.printReports = () => window.print();
 
@@ -1003,6 +1138,14 @@
                             <p class="text-lg sm:text-xl font-black text-slate-800 truncate" id="stat-hardest-q">-</p>
                         </div>
                     </div>
+                </div>
+
+                <div class="no-print bg-white rounded-2xl border border-slate-200 p-4 mb-6 w-full">
+                    <div class="relative w-full">
+                        <i class="fa-solid fa-magnifying-glass absolute right-4 top-1/2 -translate-y-1/2 text-slate-400"></i>
+                        <input type="text" id="student-search-input" oninput="window.filterSubmissions(this.value)" placeholder="ابحث باسم الطالب أو أي بيانات دخول..." class="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pr-11 pl-4 text-sm font-bold focus:ring-2 focus:ring-brand-500 outline-none min-w-0">
+                    </div>
+                    <div id="search-results-list" class="hidden mt-3 max-h-64 overflow-y-auto space-y-1 border-t border-slate-100 pt-3"></div>
                 </div>
 
                 <div id="submissions-list" class="space-y-4 sm:space-y-6 w-full"></div>
